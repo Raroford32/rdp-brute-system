@@ -183,11 +183,24 @@ func (s *OperationService) StartOperation(operationID string) error {
 	operation, exists := s.operations[operationID]
 	if !exists {
 		// Try to load from database
-		op, err := s.db.GetOperation(operationID)
+		opData, err := s.db.GetOperation(operationID)
 		if err != nil {
 			return fmt.Errorf("operation not found: %s", operationID)
 		}
-		operation = op
+		
+		// Convert from database format to Operation struct
+		opMap, ok := opData.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("invalid operation data format")
+		}
+		
+		operation = &Operation{
+			ID:          opMap["id"].(string),
+			Name:        opMap["name"].(string),
+			Description: opMap["description"].(string),
+			State:       OperationState(opMap["state"].(string)),
+			// Add other fields as needed
+		}
 		s.operations[operationID] = operation
 	}
 	
@@ -387,11 +400,25 @@ func (s *OperationService) GetOperation(operationID string) (*Operation, error) 
 	operation, exists := s.operations[operationID]
 	if !exists {
 		// Try to load from database
-		op, err := s.db.GetOperation(operationID)
+		opData, err := s.db.GetOperation(operationID)
 		if err != nil {
 			return nil, fmt.Errorf("operation not found: %s", operationID)
 		}
-		return op, nil
+		
+		// Convert from database format to Operation struct
+		opMap, ok := opData.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("invalid operation data format")
+		}
+		
+		operation = &Operation{
+			ID:          opMap["id"].(string),
+			Name:        opMap["name"].(string),
+			Description: opMap["description"].(string),
+			State:       OperationState(opMap["state"].(string)),
+			// Add other fields as needed
+		}
+		return operation, nil
 	}
 	
 	return operation, nil
@@ -403,15 +430,28 @@ func (s *OperationService) ListOperations() ([]*Operation, error) {
 	defer s.operationsMu.RUnlock()
 	
 	// Load from database to ensure we have all operations
-	operations, err := s.db.ListOperations()
+	operationsData, err := s.db.ListOperations()
 	if err != nil {
 		return nil, err
 	}
 	
 	// Update memory cache
-	for _, op := range operations {
-		if _, exists := s.operations[op.ID]; !exists {
-			s.operations[op.ID] = op
+	for _, opData := range operationsData {
+		opMap, ok := opData.(map[string]interface{})
+		if !ok {
+			continue // Skip invalid data
+		}
+		
+		opID := opMap["id"].(string)
+		if _, exists := s.operations[opID]; !exists {
+			operation := &Operation{
+				ID:          opID,
+				Name:        opMap["name"].(string),
+				Description: opMap["description"].(string),
+				State:       OperationState(opMap["state"].(string)),
+				// Add other fields as needed
+			}
+			s.operations[opID] = operation
 		}
 	}
 	
@@ -432,11 +472,24 @@ func (s *OperationService) DeleteOperation(operationID string) error {
 	operation, exists := s.operations[operationID]
 	if !exists {
 		// Try to load from database
-		op, err := s.db.GetOperation(operationID)
+		opData, err := s.db.GetOperation(operationID)
 		if err != nil {
 			return fmt.Errorf("operation not found: %s", operationID)
 		}
-		operation = op
+		
+		// Convert from database format to Operation struct
+		opMap, ok := opData.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("invalid operation data format")
+		}
+		
+		operation = &Operation{
+			ID:          opMap["id"].(string),
+			Name:        opMap["name"].(string),
+			Description: opMap["description"].(string),
+			State:       OperationState(opMap["state"].(string)),
+			// Add other fields as needed
+		}
 	}
 	
 	// Only allow deletion of completed or stopped operations
@@ -536,8 +589,8 @@ func (s *OperationService) performGracefulShutdown(operation *Operation, gracefu
 	defer cancel()
 	
 	// Notify all clients about graceful shutdown
-	clients, err := s.clientService.GetOnlineClients()
-	if err == nil {
+	clients := s.clientService.GetOnlineClients()
+	if clients != nil {
 		gracefulStop.ClientsNotified = len(clients)
 		
 		// Send graceful stop command to each client
@@ -655,7 +708,16 @@ func (s *OperationService) monitorOperation(operation *Operation) {
 			}
 			
 			s.operationsMu.Lock()
-			operation.Statistics = *stats
+			operation.Statistics = OperationStats{
+				TotalTargets:      stats.TotalTargets,
+				CompletedTargets:  stats.CompletedTargets,
+				TotalAttempts:     stats.TotalAttempts,
+				SuccessfulFinds:   stats.SuccessfulFinds,
+				AveragePPS:        stats.AveragePPS,
+				ElapsedTime:       stats.ElapsedTime,
+				EstimatedTimeLeft: stats.EstimatedTimeLeft,
+				LastUpdate:        stats.LastUpdate,
+			}
 			
 			// Calculate elapsed time
 			if operation.StartedAt != nil {
@@ -720,9 +782,9 @@ func (s *OperationService) notifyStateChange(operationID string, oldState, newSt
 
 // notifyClientsOperationStop notifies all clients to stop working on an operation
 func (s *OperationService) notifyClientsOperationStop(operationID string, graceful bool) {
-	clients, err := s.clientService.GetOnlineClients()
-	if err != nil {
-		log.Printf("Error getting online clients: %v", err)
+	clients := s.clientService.GetOnlineClients()
+	if clients == nil {
+		log.Printf("No online clients found")
 		return
 	}
 	

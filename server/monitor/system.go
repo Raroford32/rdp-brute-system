@@ -2,7 +2,6 @@ package monitor
 
 import (
 	"context"
-	"log"
 	"os"
 	"runtime"
 	"sync"
@@ -12,6 +11,7 @@ import (
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/mem"
 	"github.com/shirou/gopsutil/v3/net"
+	"rdp-brute-system/shared/logger"
 	"rdp-brute-system/shared/metrics"
 )
 
@@ -56,14 +56,14 @@ func NewSystemMonitor(metricsInstance *metrics.Metrics, alertManager *AlertManag
 func (m *SystemMonitor) Start() {
 	m.wg.Add(1)
 	go m.monitor()
-	log.Println("System monitoring started")
+	logger.ServerLogger.Info("System monitoring started")
 }
 
 // Stop stops the system monitor
 func (m *SystemMonitor) Stop() {
 	m.cancel()
 	m.wg.Wait()
-	log.Println("System monitoring stopped")
+	logger.ServerLogger.Info("System monitoring stopped")
 }
 
 // monitor is the main monitoring loop

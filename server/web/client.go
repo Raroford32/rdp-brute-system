@@ -273,7 +273,7 @@ func (c *Client) processMessage(message []byte) {
 		
 		// Mark task as completed if results were found
 		if len(resultData.Results) > 0 {
-			c.hub.distService.CompleteTask(c.id, resultData.TaskID)
+			c.hub.distService.CompleteTask(c.id, resultData.TaskID, time.Second)
 		}
 
 	case protocol.MsgStatusUpdate:

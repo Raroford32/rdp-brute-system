@@ -104,7 +104,7 @@ func (wo *WebSocketOptimizer) flushBatchLocked() {
 	}
 	
 	// Create batch message
-	batch := map[string]interface{}{
+	_ = map[string]interface{}{
 		"type":     "batch",
 		"messages": wo.batchBuffer,
 		"count":    len(wo.batchBuffer),

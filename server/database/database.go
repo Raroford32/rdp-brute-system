@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	_ "github.com/lib/pq"
 	"rdp-brute-system/server/models"
 	"rdp-brute-system/server/cache"
+	"rdp-brute-system/shared/logger"
 )
 
 type DB struct {
@@ -62,7 +62,7 @@ func NewDB(dataSourceName string) (*DB, error) {
 	db.SetConnMaxLifetime(10 * time.Minute)   // Increased from 5 minutes
 	db.SetConnMaxIdleTime(5 * time.Minute)    // Increased from 1 minute
 
-	log.Println("Database connection successful with optimized connection pooling")
+	logger.ServerLogger.Info("Database connection successful with optimized connection pooling")
 	
 	wrappedDB := &DB{
 		DB:           db,
@@ -159,7 +159,9 @@ func (db *DB) initPreparedStatements() error {
 		db.stmtCache[key] = stmt
 	}
 	
-	log.Printf("Initialized %d prepared statements", len(statements))
+	logger.ServerLogger.Info("Initialized prepared statements", map[string]interface{}{
+		"count": len(statements),
+	})
 	return nil
 }
 
@@ -219,7 +221,9 @@ func (db *DB) CreateTables() {
 		CREATE INDEX IF NOT EXISTS idx_clients_heartbeat ON clients(last_heartbeat);
 	`)
 	if err != nil {
-		log.Fatalf("Error creating clients table: %v", err)
+		logger.ServerLogger.Fatal("Error creating clients table", map[string]interface{}{
+			"error": err.Error(),
+		})
 	}
 
 	// Targets table with optimized indexes
@@ -240,7 +244,7 @@ func (db *DB) CreateTables() {
 		CREATE INDEX IF NOT EXISTS idx_targets_ip ON targets(ip);
 	`)
 	if err != nil {
-		log.Fatalf("Error creating targets table: %v", err)
+		logger.ServerLogger.Fatal("Error creating targets table", map[string]interface{}{"error": err.Error()})
 	}
 
 	// Credentials table
@@ -255,7 +259,7 @@ func (db *DB) CreateTables() {
 		CREATE INDEX IF NOT EXISTS idx_credentials_type ON credentials(type);
 	`)
 	if err != nil {
-		log.Fatalf("Error creating credentials table: %v", err)
+		logger.ServerLogger.Fatal("Error creating credentials table", map[string]interface{}{"error": err.Error()})
 	}
 
 	// Results table with indexes
@@ -277,7 +281,7 @@ func (db *DB) CreateTables() {
 		CREATE INDEX IF NOT EXISTS idx_results_ip ON results(ip);
 	`)
 	if err != nil {
-		log.Fatalf("Error creating results table: %v", err)
+		logger.ServerLogger.Fatal("Error creating results table", map[string]interface{}{"error": err.Error()})
 	}
 
 	// Tasks table with enhanced tracking and indexes
@@ -306,7 +310,7 @@ func (db *DB) CreateTables() {
 		CREATE INDEX IF NOT EXISTS idx_tasks_client_status ON tasks(client_id, status);
 	`)
 	if err != nil {
-		log.Fatalf("Error creating tasks table: %v", err)
+		logger.ServerLogger.Fatal("Error creating tasks table", map[string]interface{}{"error": err.Error()})
 	}
 
 	// Task-Targets table
@@ -321,7 +325,7 @@ func (db *DB) CreateTables() {
 		CREATE INDEX IF NOT EXISTS idx_task_targets_target ON task_targets(target_id);
 	`)
 	if err != nil {
-		log.Fatalf("Error creating task_targets table: %v", err)
+		logger.ServerLogger.Fatal("Error creating task_targets table", map[string]interface{}{"error": err.Error()})
 	}
 
 	// Config table
@@ -333,7 +337,7 @@ func (db *DB) CreateTables() {
 		)
 	`)
 	if err != nil {
-		log.Fatalf("Error creating config table: %v", err)
+		logger.ServerLogger.Fatal("Error creating config table", map[string]interface{}{"error": err.Error()})
 	}
 
 	// Operations table
@@ -358,7 +362,7 @@ func (db *DB) CreateTables() {
 		CREATE INDEX IF NOT EXISTS idx_operations_created ON operations(created_at DESC);
 	`)
 	if err != nil {
-		log.Fatalf("Error creating operations table: %v", err)
+		logger.ServerLogger.Fatal("Error creating operations table", map[string]interface{}{"error": err.Error()})
 	}
 
 	// Add operation_id to tasks table if not exists
@@ -373,7 +377,9 @@ func (db *DB) CreateTables() {
 		END$$;
 	`)
 	if err != nil {
-		log.Printf("Warning: Could not add operation_id to tasks table: %v", err)
+		logger.ServerLogger.Warn("Could not add operation_id to tasks table", map[string]interface{}{
+			"error": err.Error(),
+		})
 	}
 
 	// Add operation_id to results table if not exists
@@ -388,10 +394,12 @@ func (db *DB) CreateTables() {
 		END$$;
 	`)
 	if err != nil {
-		log.Printf("Warning: Could not add operation_id to results table: %v", err)
+		logger.ServerLogger.Warn("Could not add operation_id to results table", map[string]interface{}{
+			"error": err.Error(),
+		})
 	}
 
-	log.Println("Database tables created successfully with optimized indexes")
+	logger.ServerLogger.Info("Database tables created successfully with optimized indexes", nil)
 }
 
 // RegisterClient registers a new client or updates an existing one
@@ -599,7 +607,9 @@ func (db *DB) flushResultBufferLocked() error {
 			result.Username, result.Password, result.FoundAt, result.Verified,
 		)
 		if err != nil {
-			log.Printf("Error saving result: %v", err)
+			logger.ServerLogger.Error("Error saving result", map[string]interface{}{
+				"error": err.Error(),
+			})
 			continue
 		}
 	}
@@ -608,7 +618,9 @@ func (db *DB) flushResultBufferLocked() error {
 		return err
 	}
 	
-	log.Printf("Flushed %d results to database", len(db.resultBuffer))
+	logger.ServerLogger.Info("Flushed results to database", map[string]interface{}{
+		"count": len(db.resultBuffer),
+	})
 	db.resultBuffer = db.resultBuffer[:0]
 	
 	return nil
@@ -1052,11 +1064,14 @@ func (db *DB) OptimizeDatabase() error {
 	tables := []string{"clients", "targets", "credentials", "results", "tasks", "task_targets"}
 	for _, table := range tables {
 		if _, err := db.Exec(fmt.Sprintf("ANALYZE %s", table)); err != nil {
-			log.Printf("Failed to analyze table %s: %v", table, err)
+			logger.ServerLogger.Error("Failed to analyze table", map[string]interface{}{
+				"table": table,
+				"error": err.Error(),
+			})
 		}
 	}
 	
-	log.Println("Database optimization completed")
+	logger.ServerLogger.Info("Database optimization completed")
 	return nil
 }
 

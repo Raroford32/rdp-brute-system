@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+	
+	"rdp-brute-system/shared/logger"
 )
 
 // HistoricalDataPoint represents a single point in time for metrics
@@ -74,7 +75,9 @@ func NewPerformanceHistory(dataDir string, retentionDays int) *PerformanceHistor
 	}
 	
 	if err := os.MkdirAll(cleanDir, 0750); err != nil {
-		log.Printf("Failed to create history data directory: %v", err)
+		logger.ServerLogger.Error("Failed to create history data directory", map[string]interface{}{
+			"error": err.Error(),
+		})
 	}
 	ph.dataDir = cleanDir
 	
@@ -89,7 +92,7 @@ func (ph *PerformanceHistory) Start() {
 	ph.wg.Add(2)
 	go ph.saveRoutine()
 	go ph.cleanupRoutine()
-	log.Println("Performance history tracking started")
+	logger.ServerLogger.Info("Performance history tracking started")
 }
 
 // Stop stops the performance history manager
@@ -99,7 +102,7 @@ func (ph *PerformanceHistory) Stop() {
 	
 	// Save any remaining data
 	ph.saveCurrentData()
-	log.Println("Performance history tracking stopped")
+	logger.ServerLogger.Info("Performance history tracking stopped")
 }
 
 // AddDataPoint adds a new data point to the history
@@ -229,8 +232,11 @@ func (ph *PerformanceHistory) GetMetricHistory(metricName string, duration time.
 		}
 	}
 	
-	// isPathSafe checks if a path is within the allowed directory
-	func isPathSafe(path, allowedDir string) bool {
+	return metricHistory
+}
+
+// isPathSafe checks if a path is within the allowed directory
+func isPathSafe(path, allowedDir string) bool {
 		// Clean and resolve paths
 		cleanPath := filepath.Clean(path)
 		cleanAllowed := filepath.Clean(allowedDir)
@@ -251,9 +257,6 @@ func (ph *PerformanceHistory) GetMetricHistory(metricName string, duration time.
 		
 		// Path should not start with ".." (parent directory)
 		return !strings.HasPrefix(rel, "..")
-	}
-	
-	return metricHistory
 }
 
 // MetricDataPoint represents a single metric value at a point in time
@@ -307,18 +310,24 @@ func (ph *PerformanceHistory) saveCurrentData() {
 		// Save merged data
 		data, err := json.Marshal(merged)
 		if err != nil {
-			log.Printf("Failed to marshal historical data: %v", err)
+			logger.ServerLogger.Error("Failed to marshal historical data", map[string]interface{}{
+			"error": err.Error(),
+		})
 			continue
 		}
 		
 		// Validate filename is within dataDir
 		if !isPathSafe(filename, ph.dataDir) {
-			log.Printf("Attempted to write to unsafe path: %s", filename)
+			logger.ServerLogger.Error("Attempted to write to unsafe path", map[string]interface{}{
+			"filename": filename,
+		})
 			continue
 		}
 		
 		if err := os.WriteFile(filename, data, 0640); err != nil {
-			log.Printf("Failed to save historical data: %v", err)
+			logger.ServerLogger.Error("Failed to save historical data", map[string]interface{}{
+			"error": err.Error(),
+		})
 		}
 	}
 	
@@ -332,18 +341,24 @@ func (ph *PerformanceHistory) saveHourlyAggregates() {
 	
 	data, err := json.Marshal(ph.hourlyAggregates)
 	if err != nil {
-		log.Printf("Failed to marshal hourly aggregates: %v", err)
+		logger.ServerLogger.Error("Failed to marshal hourly aggregates", map[string]interface{}{
+			"error": err.Error(),
+		})
 		return
 	}
 	
 	// Validate file path
 	if !isPathSafe(aggregatesFile, ph.dataDir) {
-		log.Printf("Attempted to write to unsafe path: %s", aggregatesFile)
+		logger.ServerLogger.Error("Attempted to write to unsafe path", map[string]interface{}{
+			"filename": aggregatesFile,
+		})
 		return
 	}
 	
 	if err := os.WriteFile(aggregatesFile, data, 0640); err != nil {
-		log.Printf("Failed to save hourly aggregates: %v", err)
+		logger.ServerLogger.Error("Failed to save hourly aggregates", map[string]interface{}{
+			"error": err.Error(),
+		})
 	}
 }
 
@@ -351,7 +366,9 @@ func (ph *PerformanceHistory) saveHourlyAggregates() {
 func (ph *PerformanceHistory) loadDayData(filename string) []HistoricalDataPoint {
 	// Validate filename is within dataDir
 	if !isPathSafe(filename, ph.dataDir) {
-		log.Printf("Attempted to read from unsafe path: %s", filename)
+		logger.ServerLogger.Error("Attempted to read from unsafe path", map[string]interface{}{
+			"filename": filename,
+		})
 		return []HistoricalDataPoint{}
 	}
 	
@@ -362,7 +379,9 @@ func (ph *PerformanceHistory) loadDayData(filename string) []HistoricalDataPoint
 	
 	var points []HistoricalDataPoint
 	if err := json.Unmarshal(data, &points); err != nil {
-		log.Printf("Failed to unmarshal historical data: %v", err)
+		logger.ServerLogger.Error("Failed to unmarshal historical data", map[string]interface{}{
+			"error": err.Error(),
+		})
 		return []HistoricalDataPoint{}
 	}
 	
@@ -399,7 +418,9 @@ func (ph *PerformanceHistory) loadHistoricalData() {
 	aggregatesFile := filepath.Join(ph.dataDir, "hourly_aggregates.json")
 	if data, err := os.ReadFile(aggregatesFile); err == nil {
 		if err := json.Unmarshal(data, &ph.hourlyAggregates); err != nil {
-			log.Printf("Failed to load hourly aggregates: %v", err)
+			logger.ServerLogger.Error("Failed to load hourly aggregates", map[string]interface{}{
+				"error": err.Error(),
+			})
 		}
 	}
 	
@@ -408,7 +429,9 @@ func (ph *PerformanceHistory) loadHistoricalData() {
 	pattern := filepath.Join(ph.dataDir, "history_*.json")
 	files, err := filepath.Glob(pattern)
 	if err != nil {
-		log.Printf("Failed to list history files: %v", err)
+		logger.ServerLogger.Error("Failed to list history files", map[string]interface{}{
+			"error": err.Error(),
+		})
 		return
 	}
 	
@@ -449,7 +472,9 @@ func (ph *PerformanceHistory) cleanupOldData() {
 	pattern := filepath.Join(ph.dataDir, "history_*.json")
 	files, err := filepath.Glob(pattern)
 	if err != nil {
-		log.Printf("Failed to list history files for cleanup: %v", err)
+		logger.ServerLogger.Error("Failed to list history files for cleanup", map[string]interface{}{
+			"error": err.Error(),
+		})
 		return
 	}
 	
@@ -461,9 +486,14 @@ func (ph *PerformanceHistory) cleanupOldData() {
 			if date, err := time.Parse("2006-01-02", dateStr); err == nil {
 				if date.Before(cutoff) {
 					if err := os.Remove(file); err != nil {
-						log.Printf("Failed to remove old history file %s: %v", file, err)
+						logger.ServerLogger.Error("Failed to remove old history file", map[string]interface{}{
+							"file": file,
+							"error": err.Error(),
+						})
 					} else {
-						log.Printf("Removed old history file: %s", file)
+						logger.ServerLogger.Error("Removed old history file", map[string]interface{}{
+							"file": file,
+						})
 					}
 				}
 			}

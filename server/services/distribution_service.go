@@ -174,7 +174,7 @@ func (s *DistributionService) GetTask(clientID string) (*protocol.Task, error) {
 	}
 	
 	// Create new task as before
-	task, err := s.createNewTask(clientID)
+	task, err := s.createNewTask(clientID, operationID)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +186,7 @@ func (s *DistributionService) GetTask(clientID string) (*protocol.Task, error) {
 }
 
 // createNewTask creates a new task (extracted from original GetTask)
-func (s *DistributionService) createNewTask(clientID string) (*protocol.Task, error) {
+func (s *DistributionService) createNewTask(clientID string, operationID string) (*protocol.Task, error) {
 	// Calculate optimal batch sizes for this client
 	targetBatchSize, credentialBatchSize := s.calculateOptimalBatchSizes(clientID)
 	
@@ -272,7 +272,6 @@ func (s *DistributionService) createNewTask(clientID string) (*protocol.Task, er
 	
 	// Calculate dynamic expiration
 	dynamicExpiration := s.calculateDynamicExpiration(clientID, task)
-	actualExpirationMinutes := int(time.Until(dynamicExpiration).Minutes())
 	
 	log.Printf("Assigned task %s to client %s: %d targets, %d usernames, %d passwords = %d combinations (priority: %d, dynamic expiration: %s)",
 		taskID, clientID, len(targets), len(usernames), len(passwords), totalCombinations, priority, dynamicExpiration.Format("15:04:05"))
@@ -297,8 +296,13 @@ func (s *DistributionService) preAllocateNextTask(clientID string) {
 		return
 	}
 	
+	// Get current operation ID
+	s.operationMu.RLock()
+	operationID := s.activeOperationID
+	s.operationMu.RUnlock()
+	
 	// Create task now
-	task, err := s.createNewTask(clientID)
+	task, err := s.createNewTask(clientID, operationID)
 	if err != nil {
 		log.Printf("Failed to pre-allocate task for client %s: %v", clientID, err)
 		return

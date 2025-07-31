@@ -4,8 +4,6 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"net/url"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"

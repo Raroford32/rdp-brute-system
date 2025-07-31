@@ -3,10 +3,10 @@ package monitor
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 	
+	"rdp-brute-system/shared/logger"
 	"rdp-brute-system/shared/metrics"
 )
 
@@ -211,14 +211,14 @@ func (am *AlertManager) AddHandler(handler AlertHandler) {
 func (am *AlertManager) Start() {
 	am.wg.Add(1)
 	go am.monitor()
-	log.Println("Alert manager started")
+	logger.ServerLogger.Info("Alert manager started")
 }
 
 // Stop stops the alert manager
 func (am *AlertManager) Stop() {
 	am.cancel()
 	am.wg.Wait()
-	log.Println("Alert manager stopped")
+	logger.ServerLogger.Info("Alert manager stopped")
 }
 
 // monitor is the main monitoring loop
@@ -340,7 +340,10 @@ func (am *AlertManager) triggerAlert(condition AlertCondition, value float64) {
 		go handler(alert, false)
 	}
 	
-	log.Printf("Alert triggered: %s - %s", alert.Name, alert.Description)
+	logger.ServerLogger.Error("Alert triggered", map[string]interface{}{
+		"name": alert.Name,
+		"description": alert.Description,
+	})
 }
 
 // resolveAlert resolves an active alert
@@ -369,7 +372,9 @@ func (am *AlertManager) resolveAlert(alertKey string) {
 		go handler(alert, true)
 	}
 	
-	log.Printf("Alert resolved: %s", alert.Name)
+	logger.ServerLogger.Error("Alert resolved", map[string]interface{}{
+		"name": alert.Name,
+	})
 }
 
 // GetActiveAlerts returns all active alerts
