@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RDP Brute-Force Control Panel</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h1>RDP Brute-Force Control Panel</h1>
+    
+    <div class="connection-info">
+        <span>Connection: <span id="connection-status">connecting</span></span>
+        <span>Last Update: <span id="last-update">--:--:--</span></span>
+    </div>
+
+    <div class="container">
+        <div class="section operation-control-section">
+            <h2>Operation Control</h2>
+            <div class="operation-status">
+                <div class="status-info">
+                    <span>Active Operation: <span id="active-operation-name">None</span></span>
+                    <span>State: <span id="operation-state">--</span></span>
+                    <span>Progress: <span id="operation-progress">--</span></span>
+                </div>
+                <div class="operation-controls">
+                    <button id="btn-start" class="btn btn-success" disabled>Start</button>
+                    <button id="btn-pause" class="btn btn-warning" disabled>Pause</button>
+                    <button id="btn-resume" class="btn btn-info" disabled>Resume</button>
+                    <button id="btn-stop" class="btn btn-danger" disabled>Stop</button>
+                    <button id="btn-stop-graceful" class="btn btn-danger-outline" disabled>Graceful Stop</button>
+                </div>
+            </div>
+            
+            <div class="operation-create">
+                <h3>Create New Operation</h3>
+                <form id="operation-form">
+                    <div class="form-group">
+                        <label for="op-name">Operation Name:</label>
+                        <input type="text" id="op-name" name="name" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="op-description">Description:</label>
+                        <textarea id="op-description" name="description" rows="3"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="op-targets">Targets (one per line):</label>
+                        <textarea id="op-targets" name="targets" rows="5" required placeholder="192.168.1.1&#10;192.168.1.2&#10;192.168.1.3"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="op-usernames">Usernames (one per line):</label>
+                        <textarea id="op-usernames" name="usernames" rows="3" required placeholder="administrator&#10;admin&#10;user"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="op-passwords">Passwords (one per line):</label>
+                        <textarea id="op-passwords" name="passwords" rows="3" required placeholder="password123&#10;admin123&#10;12345"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="op-priority">Priority:</label>
+                        <select id="op-priority" name="priority">
+                            <option value="1">Low</option>
+                            <option value="2" selected>Medium</option>
+                            <option value="3">High</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="op-graceful" name="graceful" checked>
+                            Allow graceful shutdown
+                        </label>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Create Operation</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="section stats-section">
+            <h2>Performance Metrics</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>Total PPS</h3>
+                    <p id="total-pps">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>Successful Hits</h3>
+                    <p id="successful-hits">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>Active Tasks</h3>
+                    <p id="active-tasks">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>Success Rate</h3>
+                    <p id="success-rate">0%</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Operations List</h2>
+            <table id="operations-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>State</th>
+                        <th>Progress</th>
+                        <th>Targets</th>
+                        <th>Success</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>System Metrics</h2>
+            <div class="metrics-grid">
+                <div class="metric">
+                    <span>CPU Usage:</span>
+                    <span id="cpu-usage">0%</span>
+                </div>
+                <div class="metric">
+                    <span>Memory Usage:</span>
+                    <span id="memory-usage">0%</span>
+                </div>
+                <div class="metric">
+                    <span>Goroutines:</span>
+                    <span id="goroutines">0</span>
+                </div>
+                <div class="metric">
+                    <span>Connections:</span>
+                    <span id="connections">0</span>
+                </div>
+                <div class="metric">
+                    <span>Total Tasks:</span>
+                    <span id="total-tasks">0</span>
+                </div>
+                <div class="metric">
+                    <span>Completed Tasks:</span>
+                    <span id="completed-tasks">0</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Active Clients</h2>
+            <table id="clients-table">
+                <thead>
+                    <tr>
+                        <th>Client ID</th>
+                        <th>Hostname</th>
+                        <th>PPS</th>
+                        <th>Active Tasks</th>
+                        <th>Total Attempts</th>
+                        <th>Success Count</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                </tbody>
+            </table>
+        </div>
+
+
+        <div class="section">
+            <h2>Recent Results</h2>
+            <table id="results-table">
+                <thead>
+                    <tr>
+                        <th>Target</th>
+                        <th>Username</th>
+                        <th>Password</th>
+                        <th>Found At</th>
+                        <th>Client</th>
+                    </tr>
+                </thead>
+                <tbody>
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="metrics-info">
+            <p>Prometheus metrics available at <a href="/metrics" target="_blank">/metrics</a></p>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,105 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+rdp-server
+rdp-client
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Go workspace file
+go.work
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go build cache
+/bin/
+/dist/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Log files
+*.log
+/logs/
+server.log
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.pid
+
+# Data directories that might contain sensitive information
+/data/history/
+/data/credentials/
+/data/results/
+
+# Profile output
+*.prof
+*.pprof
+
+# Coverage files
+coverage.txt
+coverage.html
+*.cover
+
+# Debug files
+debug
+__debug_bin
+
+# Certificates and keys
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Archives
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.rar
+*.7z
+
+# Terraform files (if using infrastructure as code)
+*.tfstate
+*.tfstate.*
+.terraform/
