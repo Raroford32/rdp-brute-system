@@ -4,11 +4,31 @@ package worker
 
 import (
 	"fmt"
-	"log"
 	"runtime"
 	"syscall"
 	"unsafe"
+	"rdp-brute-system/shared/logger"
 )
+
+// CPUSet represents a CPU affinity mask
+type CPUSet struct {
+	bits [16]uint64 // Support up to 1024 CPUs
+}
+
+// Set sets the CPU bit
+func (c *CPUSet) Set(cpu int) {
+	c.bits[cpu/64] |= 1 << (cpu % 64)
+}
+
+// Clear clears the CPU bit
+func (c *CPUSet) Clear(cpu int) {
+	c.bits[cpu/64] &^= 1 << (cpu % 64)
+}
+
+// IsSet checks if CPU bit is set
+func (c *CPUSet) IsSet(cpu int) bool {
+	return c.bits[cpu/64]&(1<<(cpu%64)) != 0
+}
 
 // setCPUAffinity sets CPU affinity for the worker on Linux
 func (w *Worker) setCPUAffinity() {
@@ -19,7 +39,7 @@ func (w *Worker) setCPUAffinity() {
 	startCPU := w.id % numCPU
 	
 	// Create CPU set
-	var cpuSet syscall.CPUSet
+	var cpuSet CPUSet
 	
 	// Bind to 2-4 CPUs depending on availability
 	cpusToUse := 2
@@ -45,12 +65,15 @@ func (w *Worker) setCPUAffinity() {
 		uintptr(unsafe.Pointer(&cpuSet)))
 	
 	if errno != 0 {
-		log.Printf("Failed to set CPU affinity for worker %d: %v", w.id, errno)
+		logger.WorkerLogger.Error("Failed to set CPU affinity for worker", map[string]interface{}{
+			"worker_id": w.id,
+			"error":     errno,
+		})
 		return
 	}
 	
 	// Get affinity to verify
-	var getCpuSet syscall.CPUSet
+	var getCpuSet CPUSet
 	_, _, errno = syscall.Syscall(syscall.SYS_SCHED_GETAFFINITY,
 		uintptr(tid),
 		unsafe.Sizeof(getCpuSet),
@@ -66,7 +89,10 @@ func (w *Worker) setCPUAffinity() {
 				cpuList += fmt.Sprintf("%d", i)
 			}
 		}
-		log.Printf("Worker %d CPU affinity set to CPUs: %s", w.id, cpuList)
+		logger.WorkerLogger.Info("Worker CPU affinity set", map[string]interface{}{
+			"worker_id": w.id,
+			"cpus":      cpuList,
+		})
 	}
 }
 
@@ -77,7 +103,7 @@ func SetWorkerThreadAffinity(workerID, threadID int) {
 	// Calculate which CPU this thread should run on
 	cpu := (workerID + threadID) % numCPU
 	
-	var cpuSet syscall.CPUSet
+	var cpuSet CPUSet
 	cpuSet.Set(cpu)
 	
 	tid := syscall.Gettid()

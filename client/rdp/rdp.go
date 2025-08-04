@@ -194,8 +194,8 @@ func checkWithProtocol(ip string, port int, username, password string, protocol 
 	// Handle based on negotiated protocol
 	switch negotiatedProtocol {
 	case PROTOCOL_HYBRID, PROTOCOL_HYBRID_EX:
-		// NLA required - perform CredSSP authentication
-		return performNLAAuth(conn, ip, port, username, password)
+		// NLA required - perform real CredSSP authentication
+		return performRealNLAAuth(conn, ip, port, username, password)
 		
 	case PROTOCOL_SSL, PROTOCOL_RDSTLS:
 		// SSL/TLS required but no NLA

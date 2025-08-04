@@ -2,13 +2,13 @@ package worker
 
 import (
 	"context"
-	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"rdp-brute-system/client/rdp"
+	"rdp-brute-system/shared/logger"
 	"rdp-brute-system/shared/protocol"
 )
 
@@ -54,6 +54,7 @@ type Worker struct {
 	
 	// Target prioritization
 	targetPriority   *TargetPrioritizer
+}
 
 // DualWorkBuffer implements a dual-buffer system for zero idle time
 type DualWorkBuffer struct {
@@ -352,8 +353,12 @@ func (as *AdaptiveScaler) adjustWorkers() {
 	
 	if targetWorkers != currentWorkers {
 		as.worker.SetNumThreads(int(targetWorkers))
-		fmt.Printf("Adaptive scaling: adjusted workers from %d to %d (PPS: %d, Active Tasks: %d)\n", 
-			currentWorkers, targetWorkers, pps, activeTasks)
+		logger.WorkerLogger.Info("Adaptive scaling: adjusted workers", map[string]interface{}{
+			"current_workers": int(currentWorkers),
+			"target_workers":  int(targetWorkers),
+			"pps":             int(pps),
+			"active_tasks":    int(activeTasks),
+		})
 	}
 }
 
@@ -468,7 +473,11 @@ func (w *Worker) Start() {
 	// Set CPU affinity if supported
 	w.setCPUAffinity()
 	
-	fmt.Printf("Worker %d started with %d threads, dual-buffer system, and connection warming\n", w.id, numThreads)
+	logger.WorkerLogger.Info("Worker started", map[string]interface{}{
+		"worker_id":   w.id,
+		"num_threads": numThreads,
+		"features":    "dual-buffer system and connection warming",
+	})
 }
 
 // Stop gracefully shuts down the worker.
@@ -485,10 +494,14 @@ func (w *Worker) Stop() {
 	select {
 	case <-done:
 		// Clean shutdown
-		fmt.Printf("Worker %d stopped gracefully\n", w.id)
+		logger.WorkerLogger.Info("Worker stopped gracefully", map[string]interface{}{
+			"worker_id": w.id,
+		})
 	case <-time.After(5 * time.Second):
 		// Force shutdown after timeout
-		fmt.Printf("Worker %d force shutdown after timeout\n", w.id)
+		logger.WorkerLogger.Info("Worker force shutdown after timeout", map[string]interface{}{
+			"worker_id": w.id,
+		})
 	}
 }
 
@@ -570,7 +583,10 @@ func (w *Worker) markActive() {
 		w.idleMetrics.isIdle = false
 		
 		if idleDuration > 1*time.Second {
-			fmt.Printf("Worker %d was idle for %v\n", w.id, idleDuration)
+			logger.WorkerLogger.Info("Worker was idle", map[string]interface{}{
+				"worker_id":      w.id,
+				"idle_duration": idleDuration.String(),
+			})
 		}
 	}
 	
@@ -774,13 +790,17 @@ func (w *Worker) flushBatch() {
 			return
 		default:
 			// Result queue full, log and continue
-			fmt.Printf("Warning: Result queue full, dropping %d results\n", len(w.resultBatch)-successCount)
+			logger.WorkerLogger.Warn("Result queue full, dropping results", map[string]interface{}{
+				"dropped_results": len(w.resultBatch) - successCount,
+			})
 			break
 		}
 	}
 	
 	if successCount > 0 {
-		fmt.Printf("Flushed batch with %d successful results\n", successCount)
+		logger.WorkerLogger.Info("Flushed batch with successful results", map[string]interface{}{
+			"success_count": successCount,
+		})
 	}
 	
 	w.resultBatch = w.resultBatch[:0] // Clear batch
@@ -844,8 +864,13 @@ func (w *Worker) taskMonitor() {
 				progress := float64(completed) / float64(total) * 100
 				pps := float64(completed) / time.Since(info.StartTime).Seconds()
 				
-				fmt.Printf("Task %s: %.1f%% complete (%d/%d) - %.0f checks/sec\n", 
-					taskID, progress, completed, total, pps)
+				logger.WorkerLogger.Info("Task progress", map[string]interface{}{
+					"task_id":   taskID,
+					"progress":  progress,
+					"completed": int(completed),
+					"total":     int(total),
+					"pps":       int(pps),
+				})
 			}
 			w.taskMutex.RUnlock()
 		}
@@ -867,7 +892,11 @@ func (w *Worker) SetNumThreads(num int) {
 	// They will naturally exit when there's no work
 	
 	atomic.StoreInt32(&w.numThreads, int32(num))
-	fmt.Printf("Worker %d threads adjusted to %d (was %d)\n", w.id, num, currentThreads)
+	logger.WorkerLogger.Info("Worker threads adjusted", map[string]interface{}{
+		"worker_id":        w.id,
+		"new_threads":      num,
+		"previous_threads": currentThreads,
+	})
 }
 
 // GetMetrics returns the current metrics
@@ -1005,7 +1034,10 @@ func (w *Worker) loadTasksIntoBuffer() {
 	// Use task fetcher to get multiple tasks
 	tasks, err := w.taskFetcher()
 	if err != nil {
-		fmt.Printf("Worker %d: Error fetching tasks: %v\n", w.id, err)
+		logger.WorkerLogger.Error("Error fetching tasks", map[string]interface{}{
+			"worker_id": w.id,
+			"error":     err.Error(),
+		})
 		return
 	}
 	
@@ -1019,7 +1051,10 @@ func (w *Worker) loadTasksIntoBuffer() {
 		buffer.totalWork = len(buffer.tasks)
 		buffer.mu.Unlock()
 		
-		fmt.Printf("Worker %d: Loaded %d tasks into buffer\n", w.id, len(tasks))
+		logger.WorkerLogger.Info("Loaded tasks into buffer", map[string]interface{}{
+			"worker_id":   w.id,
+			"task_count": len(tasks),
+		})
 	}
 	
 	// Signal loading done
@@ -1070,8 +1105,11 @@ func (w *Worker) checkAndFetchTasks() {
 		
 		// If we'll exhaust in less than 5 seconds and loading buffer is empty
 		if timeToExhaust < 5.0 && loadingCount == 0 {
-			fmt.Printf("Worker %d: Predictive fetch triggered (%.1fs to exhaust, %d remaining)\n",
-				w.id, timeToExhaust, activeRemaining)
+			logger.WorkerLogger.Info("Predictive fetch triggered", map[string]interface{}{
+				"worker_id":         w.id,
+				"time_to_exhaust":   timeToExhaust,
+				"active_remaining":  activeRemaining,
+			})
 			go w.loadTasksIntoBuffer()
 		}
 	}
@@ -1152,8 +1190,12 @@ func (w *Worker) reportIdleMetrics() {
 	idlePercentage := float64(totalIdle) / float64(uptime) * 100
 	
 	if idlePercentage > 5.0 { // More than 5% idle is concerning
-		fmt.Printf("Worker %d idle metrics: %.1f%% idle time (%v total, %d idle periods)\n",
-			w.id, idlePercentage, totalIdle, idleCount)
+		logger.WorkerLogger.Info("Worker idle metrics", map[string]interface{}{
+			"worker_id":        w.id,
+			"idle_percentage":  idlePercentage,
+			"total_idle_time": totalIdle.String(),
+			"idle_periods":     idleCount,
+		})
 	}
 }
 

@@ -206,6 +206,21 @@ func (s *ClientService) GetOnlineClients() []*models.Client {
 	return onlineClients
 }
 
+// GetActiveClientCount returns the number of active/online clients
+func (s *ClientService) GetActiveClientCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	
+	count := 0
+	for _, client := range s.clients {
+		if time.Since(client.LastHeartbeat) < 2*time.Minute {
+			count++
+		}
+	}
+	
+	return count
+}
+
 // CleanupOfflineClients removes clients that haven't sent heartbeat in a while
 func (s *ClientService) CleanupOfflineClients() {
 	s.mu.Lock()

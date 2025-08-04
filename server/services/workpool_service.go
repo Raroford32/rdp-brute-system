@@ -468,7 +468,7 @@ func (wps *WorkPoolService) checkPoolHealth() {
 	
 	// Check for low work
 	if pendingCount < 100 && pendingCount > 0 {
-		log.Printf("Warning: Work pool running low (%d pending targets)", pendingCount)
+		log.Printf("Warning: Work pool running low (%d pending, %d assigned targets)", pendingCount, assignedCount)
 	}
 	
 	// Check for idle clients
@@ -568,6 +568,8 @@ func (wps *WorkPoolService) updateProgressMetrics() {
 		} else {
 			cp.IdleTime = 0
 		}
+		// Update the map with the modified progress
+		wps.progressTracker.clientProgress[clientID] = cp
 	}
 }
 

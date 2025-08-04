@@ -8,7 +8,7 @@ import (
 
 // setCPUAffinity is a no-op on non-Linux systems
 func (w *Worker) setCPUAffinity() {
-	log.Printf("CPU affinity not supported on this platform")
+	logger.WorkerLogger.Error("CPU affinity not supported on this platform")
 }
 
 // SetWorkerThreadAffinity is a no-op on non-Linux systems

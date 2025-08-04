@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"runtime"
 	"sync"
@@ -17,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"rdp-brute-system/client/rdp"
+	"rdp-brute-system/shared/logger"
 	"rdp-brute-system/shared/protocol"
 )
 
@@ -302,7 +302,7 @@ func (rb *ResultBatcher) flushLocked() {
 	case rb.processingQueue <- batchCopy:
 		rb.batch = rb.batch[:0] // Clear batch
 	default:
-		log.Printf("Warning: Result processing queue full, keeping batch")
+		logger.ClientLogger.Error("Warning: Result processing queue full, keeping batch")
 	}
 }
 
@@ -325,7 +325,7 @@ func (rb *ResultBatcher) processWorker() {
 		reportData := protocol.ResultReportData{
 			TaskID:   taskID,
 			Results:  batch,
-			Attempts: int64(len(batch)), // Simplified
+			Attempts: len(batch), // Simplified
 			Duration: 0,
 		}
 		
@@ -334,16 +334,25 @@ func (rb *ResultBatcher) processWorker() {
 		for attempt := 0; attempt < maxRetries; attempt++ {
 			_, err := rb.client.apiClient.ReportResult(reportData)
 			if err == nil {
-				log.Printf("Successfully reported batch of %d results", len(batch))
+				logger.ClientLogger.Info("Successfully reported batch of results", map[string]interface{}{
+					"batch_size": len(batch),
+				})
 				atomic.AddInt64(&rb.client.successCount, int64(len(batch)))
 				break
 			}
 			
 			if attempt < maxRetries-1 {
-				log.Printf("Failed to report batch (attempt %d/%d): %v", attempt+1, maxRetries, err)
+				logger.ClientLogger.Error("Failed to report batch", map[string]interface{}{
+					"attempt":     attempt + 1,
+					"max_retries": maxRetries,
+					"error":       err.Error(),
+				})
 				time.Sleep(time.Duration(attempt+1) * time.Second)
 			} else {
-				log.Printf("Failed to report batch after %d attempts: %v", maxRetries, err)
+				logger.ClientLogger.Error("Failed to report batch after all attempts", map[string]interface{}{
+					"max_retries": maxRetries,
+					"error":       err.Error(),
+				})
 			}
 		}
 	}
@@ -404,7 +413,9 @@ func New(serverAddr string, taskQueue chan protocol.Task, resultQueue chan rdp.R
 		return nil, err
 	}
 	
-	log.Printf("Connected to server with client ID: %s", clientID)
+	logger.ClientLogger.Info("Connected to server", map[string]interface{}{
+		"client_id": clientID,
+	})
 	return client, nil
 }
 
@@ -475,7 +486,7 @@ func (c *Client) Stop() {
 	}
 	c.connMu.Unlock()
 	
-	log.Println("Client stopped")
+	logger.ClientLogger.Info("Client stopped")
 }
 
 // heartbeatLoop sends periodic heartbeats to the server
@@ -502,7 +513,9 @@ func (c *Client) heartbeatLoop() {
 			
 			_, err := c.apiClient.SendHeartbeat(hbData)
 			if err != nil {
-				log.Printf("Failed to send heartbeat: %v", err)
+				logger.ClientLogger.Error("Failed to send heartbeat", map[string]interface{}{
+					"error": err.Error(),
+				})
 			}
 		}
 	}
@@ -580,7 +593,9 @@ func (c *Client) sendMessage(msg protocol.Message) error {
 	
 	err := conn.WriteJSON(msg)
 	if err != nil {
-		log.Printf("Failed to send message: %v", err)
+		logger.ClientLogger.Error("Failed to send message", map[string]interface{}{
+			"error": err.Error(),
+		})
 		// Trigger reconnection
 		go c.reconnect()
 		return err
@@ -593,7 +608,7 @@ func (c *Client) sendMessage(msg protocol.Message) error {
 func (c *Client) reconnect() {
 	c.mu.Lock()
 	if c.reconnectAttempts >= MaxReconnectAttempts {
-		log.Printf("Max reconnection attempts reached, giving up")
+		logger.ClientLogger.Error("Max reconnection attempts reached, giving up")
 		c.isRunning = false
 		c.mu.Unlock()
 		return
@@ -601,17 +616,22 @@ func (c *Client) reconnect() {
 	c.reconnectAttempts++
 	c.mu.Unlock()
 	
-	log.Printf("Attempting to reconnect (attempt %d/%d)...", c.reconnectAttempts, MaxReconnectAttempts)
+	logger.ClientLogger.Info("Attempting to reconnect", map[string]interface{}{
+		"attempt":     c.reconnectAttempts,
+		"max_attempts": MaxReconnectAttempts,
+	})
 	
 	time.Sleep(ReconnectInterval)
 	
 	if err := c.connectWebSocket(); err != nil {
-		log.Printf("Reconnection failed: %v", err)
+		logger.ClientLogger.Error("Reconnection failed", map[string]interface{}{
+			"error": err.Error(),
+		})
 		go c.reconnect() // Try again
 		return
 	}
 	
-	log.Println("Reconnected successfully")
+	logger.ClientLogger.Info("Reconnected successfully")
 	
 	// Restart message handler
 	go c.handleMessages()
@@ -648,7 +668,9 @@ func (c *Client) handleMessages() {
 		var msg protocol.Message
 		err := conn.ReadJSON(&msg)
 		if err != nil {
-			log.Printf("WebSocket read error: %v", err)
+			logger.ClientLogger.Error("WebSocket read error", map[string]interface{}{
+				"error": err.Error(),
+			})
 			go c.reconnect()
 			return
 		}
@@ -657,7 +679,9 @@ func (c *Client) handleMessages() {
 		case protocol.MsgTaskAssign:
 			var taskData protocol.TaskAssignData
 			if err := json.Unmarshal(msg.Data, &taskData); err != nil {
-				log.Printf("Failed to unmarshal task data: %v", err)
+				logger.ClientLogger.Error("Failed to unmarshal task data", map[string]interface{}{
+					"error": err.Error(),
+				})
 				continue
 			}
 			
@@ -668,10 +692,16 @@ func (c *Client) handleMessages() {
 				
 				select {
 				case c.taskQueue <- task:
-					log.Printf("Received task %s with %d IPs, %d usernames, %d passwords", 
-						task.ID, len(task.IPs), len(task.Usernames), len(task.Passwords))
+					logger.ClientLogger.Info("Received task", map[string]interface{}{
+						"task_id":    task.ID,
+						"ip_count":   len(task.IPs),
+						"user_count": len(task.Usernames),
+						"pass_count": len(task.Passwords),
+					})
 				default:
-					log.Printf("Task queue full, dropping task %s", task.ID)
+					logger.ClientLogger.Error("Task queue full, dropping task", map[string]interface{}{
+						"task_id": task.ID,
+					})
 					c.activeTasks.Delete(task.ID)
 				}
 			}
@@ -679,29 +709,37 @@ func (c *Client) handleMessages() {
 		case protocol.MsgConfigUpdate:
 			var configData protocol.ConfigUpdateData
 			if err := json.Unmarshal(msg.Data, &configData); err != nil {
-				log.Printf("Failed to unmarshal config data: %v", err)
+				logger.ClientLogger.Error("Failed to unmarshal config data", map[string]interface{}{
+					"error": err.Error(),
+				})
 				continue
 			}
 			
 			if configData.MaxThreads > 0 {
 				c.maxThreads = configData.MaxThreads
-				log.Printf("Updated max threads to %d", c.maxThreads)
+				logger.ClientLogger.Info("Updated max threads", map[string]interface{}{
+					"max_threads": c.maxThreads,
+				})
 			}
 			
 		case protocol.MsgShutdown:
-			log.Println("Received shutdown command from server")
+			logger.ClientLogger.Info("Received shutdown command from server")
 			c.Stop()
 			return
 			
 		case protocol.MsgOperationStop:
 			var opData protocol.OperationCommandData
 			if err := json.Unmarshal(msg.Data, &opData); err != nil {
-				log.Printf("Failed to unmarshal operation command data: %v", err)
+				logger.ClientLogger.Error("Failed to unmarshal operation command data", map[string]interface{}{
+					"error": err.Error(),
+				})
 				continue
 			}
 			
-			log.Printf("Received operation stop command for operation %s (graceful: %v)",
-				opData.OperationID, opData.Graceful)
+			logger.ClientLogger.Info("Received operation stop command", map[string]interface{}{
+				"operation_id": opData.OperationID,
+				"graceful":     opData.Graceful,
+			})
 			
 			if opData.Graceful {
 				// Graceful shutdown - finish current work
@@ -715,21 +753,29 @@ func (c *Client) handleMessages() {
 		case protocol.MsgOperationPause:
 			var opData protocol.OperationCommandData
 			if err := json.Unmarshal(msg.Data, &opData); err != nil {
-				log.Printf("Failed to unmarshal operation command data: %v", err)
+				logger.ClientLogger.Error("Failed to unmarshal operation command data", map[string]interface{}{
+					"error": err.Error(),
+				})
 				continue
 			}
 			
-			log.Printf("Received operation pause command for operation %s", opData.OperationID)
+			logger.ClientLogger.Info("Received operation pause command", map[string]interface{}{
+				"operation_id": opData.OperationID,
+			})
 			c.handlePause()
 			
 		case protocol.MsgOperationResume:
 			var opData protocol.OperationCommandData
 			if err := json.Unmarshal(msg.Data, &opData); err != nil {
-				log.Printf("Failed to unmarshal operation command data: %v", err)
+				logger.ClientLogger.Error("Failed to unmarshal operation command data", map[string]interface{}{
+					"error": err.Error(),
+				})
 				continue
 			}
 			
-			log.Printf("Received operation resume command for operation %s", opData.OperationID)
+			logger.ClientLogger.Info("Received operation resume command", map[string]interface{}{
+				"operation_id": opData.OperationID,
+			})
 			c.handleResume()
 		}
 	}
@@ -765,8 +811,11 @@ func (c *Client) metricsReporter() {
 			
 			if pps > 0 {
 				successCount := atomic.LoadInt64(&c.successCount)
-				log.Printf("Performance: %d checks/sec, %d total attempts, %d successes", 
-					pps, currentAttempts, successCount)
+				logger.ClientLogger.Info("Performance stats", map[string]interface{}{
+					"checks_per_sec":   pps,
+					"total_attempts":   currentAttempts,
+					"success_count":    successCount,
+				})
 			}
 		}
 	}
@@ -801,7 +850,7 @@ func getHostname() string {
 
 // handleGracefulStop performs a graceful shutdown
 func (c *Client) handleGracefulStop() {
-	log.Println("Starting graceful shutdown...")
+	logger.ClientLogger.Info("Starting graceful shutdown...")
 	
 	// Stop accepting new tasks
 	c.pauseMu.Lock()
@@ -821,16 +870,20 @@ func (c *Client) handleGracefulStop() {
 		})
 		
 		if activeCount == 0 {
-			log.Println("All tasks completed, shutting down")
+			logger.ClientLogger.Info("All tasks completed, shutting down")
 			break
 		}
 		
 		if time.Since(startTime) > maxWaitTime {
-			log.Printf("Graceful shutdown timeout reached, %d tasks still active", activeCount)
+			logger.ClientLogger.Error("Graceful shutdown timeout reached", map[string]interface{}{
+				"active_tasks": activeCount,
+			})
 			break
 		}
 		
-		log.Printf("Waiting for %d active tasks to complete...", activeCount)
+		logger.ClientLogger.Info("Waiting for active tasks to complete", map[string]interface{}{
+			"active_tasks": activeCount,
+		})
 		time.Sleep(checkInterval)
 	}
 	
@@ -850,7 +903,7 @@ func (c *Client) handlePause() {
 	c.isPaused = true
 	c.pauseMu.Unlock()
 	
-	log.Println("Client paused - not accepting new tasks")
+	logger.ClientLogger.Info("Client paused - not accepting new tasks")
 }
 
 // handleResume resumes task processing
@@ -859,7 +912,7 @@ func (c *Client) handleResume() {
 	c.isPaused = false
 	c.pauseMu.Unlock()
 	
-	log.Println("Client resumed - accepting new tasks")
+	logger.ClientLogger.Info("Client resumed - accepting new tasks")
 	
 	// Request tasks immediately
 	go c.requestTasks()

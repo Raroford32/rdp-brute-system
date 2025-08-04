@@ -2,12 +2,12 @@ package worker
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 	"rdp-brute-system/client/rdp"
+	"rdp-brute-system/shared/logger"
 )
 
 // ConnectionWarmer pre-establishes connections to improve latency
@@ -48,7 +48,7 @@ func NewConnectionWarmer(worker *Worker) *ConnectionWarmer {
 // Start begins the connection warming routine
 func (cw *ConnectionWarmer) Start() {
 	go cw.warmupRoutine()
-	log.Println("Connection warmer started")
+	logger.WorkerLogger.Info("Connection warmer started")
 }
 
 // Stop stops the connection warming
@@ -215,7 +215,7 @@ func (cw *ConnectionWarmer) PrioritizeTargets(successfulIPs []string) {
 		// Extract subnet (simple /24 check)
 		subnet := getSubnet24(successIP)
 		
-		for key, target := range cw.warmupTargets {
+		for _, target := range cw.warmupTargets {
 			if getSubnet24(target.IP) == subnet {
 				target.Priority += 10
 			}
