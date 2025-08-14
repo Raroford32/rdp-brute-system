@@ -20,6 +20,12 @@ The system consists of two main components:
 - **Memory Pooling**: Minimizes GC pressure for sustained performance
 - **Real-time Dashboard**: Web-based monitoring and control interface
 
+## Authentication Support (v1)
+- Supported: NLA (CredSSP over TLS) using NTLMv2 via SPNEGO
+- Not yet supported: Non‑NLA RDP Security and TLS‑only without CredSSP
+- Username formats: domain\user and user@domain are both accepted; the domain will be parsed automatically
+- Note: This tool performs only authentication (no full desktop session) to minimize overhead and maximize throughput
+
 ## Performance Benchmarks
 
 Based on testing with optimized configuration:
@@ -55,7 +61,7 @@ Based on testing with optimized configuration:
 # Install Go
 wget https://go.dev/dl/go1.21.0.linux-amd64.tar.gz
 sudo tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz
-export PATH=$PATH:/usr/local/bin/go
+export PATH=$PATH:/usr/local/go/bin
 
 # Install PostgreSQL
 sudo apt update
