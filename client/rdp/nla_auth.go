@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"github.com/Azure/go-ntlmssp"
 	"golang.org/x/crypto/md4"
 )
 
@@ -126,110 +127,76 @@ func performCredSSPAuthNTLM(conn *tls.Conn, username, password string) (bool, er
  
 // performCredSSPAuth performs the CredSSP authentication protocol
 func performCredSSPAuth(conn *tls.Conn, username, password string) (bool, error) {
-	// Step 1: Send CredSSP negotiation
-	credsspNeg := buildCredSSPNegotiation()
+	type1, err := ntlmssp.NewNegotiateMessage("", "")
+	if err != nil {
+		return false, fmt.Errorf("build NTLM type1 failed: %v", err)
+	}
+
+	// Step 1: Send CredSSP negotiation with SPNEGO init carrying NTLM Type1
+	credsspNeg := buildCredSSPNegotiation(type1)
 	if err := sendCredSSPMessage(conn, credsspNeg); err != nil {
 		return false, fmt.Errorf("CredSSP negotiation failed: %v", err)
 	}
 
-	// Step 2: Receive server response
-	response, err := receiveCredSSPMessage(conn)
+	// Step 2: Receive server response (should contain NTLM Type 2 in SPNEGO)
+	type2Container, err := receiveCredSSPMessage(conn)
 	if err != nil {
 		return false, fmt.Errorf("CredSSP response failed: %v", err)
 	}
 
-	// Step 3: Extract NTLM challenge from response
-	_, err = extractNTLMChallenge(response)
+	type2Blob := findNTLMBlob(type2Container)
+	if type2Blob == nil {
+		return false, fmt.Errorf("no NTLMSSP challenge found in server response")
+	}
+
+	domain, user := parseDomainUser(username)
+	domainNeeded := domain != ""
+
+	// Step 3: Build NTLM Type 3 using the library
+	type3, err := ntlmssp.ProcessChallenge(type2Blob, user, password, domainNeeded)
 	if err != nil {
-		return false, fmt.Errorf("NTLM challenge extraction failed: %v", err)
+		return false, fmt.Errorf("build NTLM type3 failed: %v", err)
 	}
 
-	// Step 4: Generate NTLM Type 1 message
-	type1Msg := buildNTLMType1Message()
-	credsspAuth1 := buildCredSSPAuth(type1Msg)
-	if err := sendCredSSPMessage(conn, credsspAuth1); err != nil {
-		return false, fmt.Errorf("NTLM Type 1 failed: %v", err)
-	}
-
-	// Step 5: Receive NTLM Type 2 challenge
-	type2Response, err := receiveCredSSPMessage(conn)
-	if err != nil {
-		return false, fmt.Errorf("NTLM Type 2 response failed: %v", err)
-	}
-
-	type2Challenge, err := extractNTLMType2(type2Response)
-	if err != nil {
-		return false, fmt.Errorf("NTLM Type 2 parsing failed: %v", err)
-	}
-
-	// Step 6: Generate NTLM Type 3 response
-	type3Msg, err := buildNTLMType3Message(username, password, type2Challenge)
-	if err != nil {
-		return false, fmt.Errorf("NTLM Type 3 generation failed: %v", err)
-	}
-
-	credsspAuth3 := buildCredSSPAuth(type3Msg)
+	// Step 4: Send CredSSP auth with NTLM Type3
+	credsspAuth3 := buildCredSSPAuth(type3)
 	if err := sendCredSSPMessage(conn, credsspAuth3); err != nil {
-		return false, fmt.Errorf("NTLM Type 3 failed: %v", err)
+		return false, fmt.Errorf("NTLM Type 3 send failed: %v", err)
 	}
 
-	// Step 7: Check authentication result
+	// Step 5: Final response
 	finalResponse, err := receiveCredSSPMessage(conn)
 	if err != nil {
 		return false, fmt.Errorf("final auth response failed: %v", err)
 	}
 
-	// Parse the response to determine success/failure
 	return parseAuthResult(finalResponse), nil
 }
 
-// buildCredSSPNegotiation builds the initial CredSSP negotiation message
-func buildCredSSPNegotiation() []byte {
-	// CredSSP TSRequest with negoTokens
-	// This is a simplified ASN.1 DER encoded structure
-	return []byte{
-		0x30, 0x37, // SEQUENCE
-		0xa0, 0x03, // [0] version
-		0x02, 0x01, 0x02, // INTEGER 2
-		0xa1, 0x30, // [1] negoTokens
-		0x30, 0x2e, // SEQUENCE
-		0x30, 0x2c, // SEQUENCE
-		0xa0, 0x2a, // [0] negToken
-		0x30, 0x28, // SEQUENCE
-		0xa0, 0x26, // [0] mechTypes
-		0x30, 0x24, // SEQUENCE
-		0x06, 0x09, 0x2a, 0x86, 0x48, 0x82, 0xf7, 0x12, 0x01, 0x02, 0x02, // NTLM OID
-		0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02, // Kerberos OID
-		0x06, 0x0a, 0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x02, 0x0a, // NEGOEX OID
-	}
+// buildCredSSPNegotiation builds the initial CredSSP negotiation message embedding NTLM Type1
+func buildCredSSPNegotiation(ntlmType1 []byte) []byte {
+	ntlmOID := []byte{0x06, 0x09, 0x2a, 0x86, 0x48, 0x82, 0xf7, 0x12, 0x01, 0x02, 0x02}
+
+	mechTypes := append([]byte{0x30, byte(len(ntlmOID))}, ntlmOID...)
+	negTokenInit := []byte{0x30, 0x00}
+	// [0] mechTypes
+	mt := append([]byte{0xa0, byte(len(mechTypes))}, mechTypes...)
+	mechToken := append([]byte{0x82, byte(len(ntlmType1) >> 8), byte(len(ntlmType1) & 0xff)}, ntlmType1...)
+	mtAndToken := append(mt, append([]byte{0xa2}, mechToken...)...)
+	negTokenInit[1] = byte(len(mtAndToken))
+	negTokenInit = append(negTokenInit, mtAndToken...)
+
+	negTokenTarg := append([]byte{0x30, byte(len(negTokenInit))}, negTokenInit...)
+	negoTokens := append([]byte{0xa1, byte(len(negTokenTarg))}, negTokenTarg...)
+
+	body := append([]byte{0xa0, 0x03, 0x02, 0x01, 0x02}, negoTokens...)
+	seq := append([]byte{0x30, byte(len(body))}, body...)
+	return seq
 }
 
-// buildNTLMType1Message creates an NTLM Type 1 message
+// buildNTLMType1Message creates an NTLM Type 1 message using the library
 func buildNTLMType1Message() []byte {
-	signature := []byte("NTLMSSP\x00")
-	msgType := uint32(NTLM_TYPE_1)
-	flags := uint32(NTLM_NEGOTIATE_UNICODE | NTLM_REQUEST_TARGET | NTLM_NEGOTIATE_NTLM | NTLM_NEGOTIATE_ALWAYS_SIGN | NTLM_NEGOTIATE_NTLM2)
-	
-	// Domain and workstation are empty for Type 1
-	domainLen := uint16(0)
-	domainMaxLen := uint16(0)
-	domainOffset := uint32(32)
-	
-	workstationLen := uint16(0)
-	workstationMaxLen := uint16(0)
-	workstationOffset := uint32(32)
-	
-	msg := make([]byte, 32)
-	copy(msg[0:8], signature)
-	binary.LittleEndian.PutUint32(msg[8:12], msgType)
-	binary.LittleEndian.PutUint32(msg[12:16], flags)
-	binary.LittleEndian.PutUint16(msg[16:18], domainLen)
-	binary.LittleEndian.PutUint16(msg[18:20], domainMaxLen)
-	binary.LittleEndian.PutUint32(msg[20:24], domainOffset)
-	binary.LittleEndian.PutUint16(msg[24:26], workstationLen)
-	binary.LittleEndian.PutUint16(msg[26:28], workstationMaxLen)
-	binary.LittleEndian.PutUint32(msg[28:32], workstationOffset)
-	
+	msg, _ := ntlmssp.NewNegotiateMessage("", "")
 	return msg
 }
 
