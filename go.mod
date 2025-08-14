@@ -3,6 +3,7 @@ module rdp-brute-system
 go 1.21
 
 require (
+	github.com/Azure/go-ntlmssp v0.0.0-20220614195322-cfed8f9326b0
 	github.com/gin-gonic/gin v1.9.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.1

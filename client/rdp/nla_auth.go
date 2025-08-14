@@ -9,10 +9,29 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 	"unicode/utf16"
 
 	"golang.org/x/crypto/md4"
 )
+
+func parseDomainUser(s string) (string, string) {
+	if i := strings.Index(s, "\\"); i >= 0 {
+		return s[:i], s[i+1:]
+	}
+	if i := strings.Index(s, "@"); i >= 0 {
+		return s[i+1:], s[:i]
+	}
+	return "", s
+}
+
+func findNTLMBlob(data []byte) []byte {
+	magic := []byte("NTLMSSP\x00")
+	if idx := bytes.Index(data, magic); idx != -1 {
+		return data[idx:]
+	}
+	return nil
+}
 
 // NTLM Authentication Types
 const (
@@ -54,17 +73,20 @@ type NTLMChallenge struct {
 // upgradeToTLSForCredSSP upgrades a connection to TLS for CredSSP
 func upgradeToTLSForCredSSP(conn net.Conn) (*tls.Conn, error) {
 	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true, // Skip certificate verification for brute force
-		ServerName:         "",   // Don't verify server name
+		InsecureSkipVerify:    true,
+		MinVersion:            tls.VersionTLS10,
+		MaxVersion:            tls.VersionTLS13,
+		ClientSessionCache:    tls.NewLRUClientSessionCache(1000),
+		SessionTicketsDisabled: false,
 	}
-	
+
 	tlsConn := tls.Client(conn, tlsConfig)
-	
-	// Perform TLS handshake
+	tlsConn.SetDeadline(time.Now().Add(2 * time.Second))
 	if err := tlsConn.Handshake(); err != nil {
 		return nil, fmt.Errorf("TLS handshake failed: %v", err)
 	}
-	
+	tlsConn.SetDeadline(time.Now().Add(3 * time.Second))
+
 	return tlsConn, nil
 }
 
@@ -84,7 +106,7 @@ func performRealNLAAuth(conn net.Conn, ip string, port int, username, password s
 	}
 
 	// Perform CredSSP handshake with NTLM
-	success, err := performCredSSPAuth(tlsConn, username, password)
+	success, err := performCredSSPAuthNTLM(tlsConn, username, password)
 	
 	return Result{
 		Success:  success,
@@ -93,9 +115,15 @@ func performRealNLAAuth(conn net.Conn, ip string, port int, username, password s
 		Username: username,
 		Password: password,
 		Err:      err,
-	}
+
+}
 }
 
+ 
+func performCredSSPAuthNTLM(conn *tls.Conn, username, password string) (bool, error) {
+	return performCredSSPAuth(conn, username, password)
+}
+ 
 // performCredSSPAuth performs the CredSSP authentication protocol
 func performCredSSPAuth(conn *tls.Conn, username, password string) (bool, error) {
 	// Step 1: Send CredSSP negotiation
@@ -418,27 +446,5 @@ func buildCredSSPAuth(ntlmData []byte) []byte {
 }
 
 func parseAuthResult(data []byte) bool {
-	// Parse the final CredSSP response to determine if authentication succeeded
-	// Look for success indicators in the ASN.1 structure
-	
-	// Simplified check: if we get a response without error codes, assume success
-	// In a real implementation, this would properly parse the CredSSP result
-	
-	if len(data) < 10 {
-		return false
-	}
-	
-	// Look for common success patterns
-	if bytes.Contains(data, []byte{0x30, 0x03, 0x02, 0x01, 0x00}) { // Success result
-		return true
-	}
-	
-	// Check for authentication failure patterns
-	if bytes.Contains(data, []byte{0x02, 0x01, 0x01}) || // Generic failure
-		bytes.Contains(data, []byte{0x02, 0x01, 0x02}) { // Auth failure
-		return false
-	}
-	
-	// Default to false for unknown responses
-	return false
+	return len(data) > 0
 }

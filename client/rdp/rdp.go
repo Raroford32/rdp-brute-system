@@ -145,7 +145,6 @@ func checkWithProtocol(ip string, port int, username, password string, protocol 
 	// Use shorter timeout for initial connection
 	conn, err := net.DialTimeout("tcp", target, DialTimeout)
 	if err != nil {
-		// Classify error for fast-fail
 		errType := classifyNetworkError(err)
 		return Result{
 			Success:  false,
@@ -157,7 +156,13 @@ func checkWithProtocol(ip string, port int, username, password string, protocol 
 		}
 	}
 	defer conn.Close()
-	
+
+	if tc, ok := conn.(*net.TCPConn); ok {
+		tc.SetNoDelay(true)
+		tc.SetKeepAlive(true)
+		tc.SetKeepAlivePeriod(30 * time.Second)
+	}
+
 	// Set connection timeout
 	conn.SetDeadline(time.Now().Add(ConnectionTimeout))
 	
@@ -417,87 +422,14 @@ func performNLAAuth(conn net.Conn, ip string, port int, username, password strin
 
 // performStandardRDPAuth performs standard RDP authentication (without NLA)
 func performStandardRDPAuth(conn net.Conn, ip string, port int, username, password string) Result {
-	// Standard RDP authentication with optimized timeouts
-	
-	// Send MCS Connect Initial
-	mcsConnect := []byte{
-		0x03, 0x00, 0x00, 0x65, // TPKT
-		0x02, 0xf0, 0x80,       // X224 Data TPDU
-		// ... MCS Connect Initial PDU would go here
-	}
-	
-	conn.SetWriteDeadline(time.Now().Add(FastFailTimeout))
-	_, err := conn.Write(mcsConnect)
-	if err != nil {
 		return Result{
 			Success:  false,
 			IP:       ip,
 			Port:     port,
 			Username: username,
 			Password: password,
-			Err:      fmt.Errorf("MCS connect failed: %v", err),
+			Err:      fmt.Errorf("non-NLA RDP authentication not supported in this version"),
 		}
-	}
-	
-	// Read response
-	conn.SetReadDeadline(time.Now().Add(FastFailTimeout))
-	response := make([]byte, 4096)
-	n, err := conn.Read(response)
-	if err != nil || n < 4 {
-		return Result{
-			Success:  false,
-			IP:       ip,
-			Port:     port,
-			Username: username,
-			Password: password,
-			Err:      fmt.Errorf("MCS response failed: %v", err),
-		}
-	}
-	
-	// Check if we got a valid TPKT response
-	if response[0] != 0x03 {
-		return Result{
-			Success:  false,
-			IP:       ip,
-			Port:     port,
-			Username: username,
-			Password: password,
-			Err:      fmt.Errorf("invalid MCS response"),
-		}
-	}
-	
-	// Demo: simulate authentication
-	if username == "administrator" && password == "password123" {
-		return Result{
-			Success:  true,
-			IP:       ip,
-			Port:     port,
-			Username: username,
-			Password: password,
-			Err:      nil,
-		}
-	}
-	
-	// Random success for demonstration
-	if time.Now().UnixNano()%1000 == 0 {
-		return Result{
-			Success:  true,
-			IP:       ip,
-			Port:     port,
-			Username: username,
-			Password: password,
-			Err:      nil,
-		}
-	}
-	
-	return Result{
-		Success:  false,
-		IP:       ip,
-		Port:     port,
-		Username: username,
-		Password: password,
-		Err:      fmt.Errorf("authentication failed"),
-	}
 }
 
 // Cache management functions
