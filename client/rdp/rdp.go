@@ -547,6 +547,12 @@ func isAuthFailure(err error) bool {
 		"invalid credentials",
 		"logon failure",
 		"access denied",
+		"STATUS_LOGON_FAILURE",
+		"SEC_E_LOGON_DENIED",
+		"CredSSP authentication failed",
+		"NTLM authentication failed",
+		"The attempted logon is invalid",
+		"The logon attempt failed",
 	}
 	
 	errStr := err.Error()
