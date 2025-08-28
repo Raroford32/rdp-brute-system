@@ -32,6 +32,40 @@
                 </div>
             </div>
             
+            <div class="file-upload-section">
+                <h3>Quick File Upload</h3>
+                <form id="file-upload-form" enctype="multipart/form-data">
+                    <div class="upload-grid">
+                        <div class="upload-item">
+                            <label for="ips-file">IP Targets (ips.txt):</label>
+                            <input type="file" id="ips-file" name="ips" accept=".txt,.csv">
+                            <div class="file-info" id="ips-info"></div>
+                        </div>
+                        <div class="upload-item">
+                            <label for="users-file">Usernames (users.txt):</label>
+                            <input type="file" id="users-file" name="users" accept=".txt,.csv">
+                            <div class="file-info" id="users-info"></div>
+                        </div>
+                        <div class="upload-item">
+                            <label for="passwords-file">Passwords (passwords.txt):</label>
+                            <input type="file" id="passwords-file" name="passwords" accept=".txt,.csv">
+                            <div class="file-info" id="passwords-info"></div>
+                        </div>
+                    </div>
+                    <div class="upload-controls">
+                        <button type="submit" class="btn btn-primary">Upload Files</button>
+                        <button type="button" id="clear-files" class="btn btn-secondary">Clear</button>
+                    </div>
+                    <div class="upload-progress" id="upload-progress">
+                        <div class="progress-bar">
+                            <div class="progress-bar-fill" id="upload-progress-fill"></div>
+                            <div class="progress-text" id="upload-progress-text">0%</div>
+                        </div>
+                        <div class="upload-status" id="upload-status"></div>
+                    </div>
+                </form>
+            </div>
+            
             <div class="operation-create">
                 <h3>Create New Operation</h3>
                 <form id="operation-form">
