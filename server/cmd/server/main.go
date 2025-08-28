@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"net/http"
 	"os"
@@ -21,17 +22,31 @@ import (
 	"rdp-brute-system/shared/metrics"
 )
 
+
 func main() {
-	// Load .env file
-	if err := godotenv.Load(); err != nil {
-		// Continue without .env file, use environment variables
-	}
-	
-	// Initialize logging system
+	Run()
+}
+
+func Run() {
+	RunWithEmbeddedAssetsContext(context.Background())
+}
+
+func RunWithEmbeddedAssets(staticFiles, templateFiles embed.FS) {
+	RunWithEmbeddedAssetsContext(context.Background())
+}
+
+func RunWithEmbeddedAssetsContext(ctx context.Context) {
+	// Initialize logging system first
 	logDir := getEnv("LOG_DIR", "./logs")
 	silentMode := getEnv("SILENT_MODE", "true") == "true"
 	if err := logger.InitializeLoggers(logDir, silentMode); err != nil {
+		fmt.Printf("Failed to initialize loggers: %v\n", err)
 		os.Exit(1)
+	}
+	
+	// Load environment variables
+	if err := godotenv.Load(); err != nil {
+		logger.ServerLogger.Info("No .env file found (this is normal)", nil)
 	}
 	
 	// Set Gin to release mode for production
@@ -39,26 +54,17 @@ func main() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	
-	// Get database configuration from environment variables
-	dbHost := getEnv("DB_HOST", "localhost")
-	dbPort := getEnv("DB_PORT", "5432")
-	dbUser := getEnv("DB_USER", "user")
-	dbPassword := getEnv("DB_PASSWORD", "password")
-	dbName := getEnv("DB_NAME", "rdp_brute")
-	sslMode := getEnv("DB_SSLMODE", "disable")
+	dbPath := getEnv("DB_PATH", "./rdp_brute.db")
 	
-	// Construct connection string
-	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
-		dbHost, dbPort, dbUser, dbPassword, dbName, sslMode)
+	// Construct SQLite connection string
+	dsn := fmt.Sprintf("file:%s?cache=shared&mode=rwc&_journal_mode=WAL&_foreign_keys=on", dbPath)
 	
-	logger.ServerLogger.Info("Connecting to database", map[string]interface{}{
-		"host": dbHost,
-		"port": dbPort,
-		"name": dbName,
+	logger.ServerLogger.Info("Connecting to SQLite database", map[string]interface{}{
+		"path": dbPath,
 	})
 	
-	// Initialize Database
-	db, err := database.NewDB(dsn)
+	// Initialize Database with SQLite
+	db, err := database.NewSQLiteDB(dsn)
 	if err != nil {
 		logger.ServerLogger.Fatal("Failed to connect to database", map[string]interface{}{
 			"error": err.Error(),
@@ -137,7 +143,6 @@ func main() {
 	// Apply rate limiting to all routes
 	router.Use(middleware.DefaultAPIRateLimiter())
 
-	// Serve Static Files and HTML
 	router.Static("/static", "./server/web/static")
 	router.LoadHTMLGlob("server/web/*.html")
 
@@ -179,26 +184,29 @@ func main() {
 		}
 	}()
 	
-	// Wait for interrupt signal to gracefully shutdown the server
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-	
-	logger.ServerLogger.Info("Shutdown signal received, stopping server")
+
+	select {
+	case <-ctx.Done():
+		logger.ServerLogger.Info("Server context cancelled")
+	case <-quit:
+		logger.ServerLogger.Info("Shutdown signal received, stopping server")
+	}
 	
 	// Create shutdown context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	
 	// Shutdown the HTTP server
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.ServerLogger.Error("Server forced to shutdown", map[string]interface{}{
 			"error": err.Error(),
 		})
 	}
 	
 	// Shutdown the WebSocket hub
-	if err := hub.Shutdown(ctx); err != nil {
+	if err := hub.Shutdown(shutdownCtx); err != nil {
 		logger.ServerLogger.Error("WebSocket hub shutdown error", map[string]interface{}{
 			"error": err.Error(),
 		})

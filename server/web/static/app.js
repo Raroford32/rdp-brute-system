@@ -121,6 +121,136 @@ document.addEventListener('DOMContentLoaded', () => {
     loadActiveOperation();
     loadOperations();
     
+    setupFileUpload();
+    
+    function setupFileUpload() {
+        const fileUploadForm = document.getElementById('file-upload-form');
+        const clearFilesBtn = document.getElementById('clear-files');
+        const uploadProgress = document.getElementById('upload-progress');
+        const progressFill = document.getElementById('upload-progress-fill');
+        const progressText = document.getElementById('upload-progress-text');
+        const uploadStatus = document.getElementById('upload-status');
+        
+        if (!fileUploadForm) return;
+        
+        ['ips-file', 'users-file', 'passwords-file'].forEach(id => {
+            const input = document.getElementById(id);
+            const info = document.getElementById(id.replace('-file', '-info'));
+            
+            if (input && info) {
+                input.addEventListener('change', (e) => {
+                    const file = e.target.files[0];
+                    if (file) {
+                        const sizeKB = (file.size / 1024).toFixed(1);
+                        info.textContent = `${file.name} (${sizeKB} KB)`;
+                        info.style.color = '#4CAF50';
+                    } else {
+                        info.textContent = '';
+                    }
+                });
+            }
+        });
+        
+        if (clearFilesBtn) {
+            clearFilesBtn.addEventListener('click', () => {
+                ['ips-file', 'users-file', 'passwords-file'].forEach(id => {
+                    const input = document.getElementById(id);
+                    const info = document.getElementById(id.replace('-file', '-info'));
+                    if (input) input.value = '';
+                    if (info) info.textContent = '';
+                });
+                if (uploadProgress) uploadProgress.classList.remove('active');
+            });
+        }
+        
+        fileUploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData();
+            const ipsFile = document.getElementById('ips-file').files[0];
+            const usersFile = document.getElementById('users-file').files[0];
+            const passwordsFile = document.getElementById('passwords-file').files[0];
+            
+            if (!ipsFile && !usersFile && !passwordsFile) {
+                showNotification('Please select at least one file to upload', 'error');
+                return;
+            }
+            
+            if (ipsFile) formData.append('ips', ipsFile);
+            if (usersFile) formData.append('users', usersFile);
+            if (passwordsFile) formData.append('passwords', passwordsFile);
+            
+            if (uploadProgress) {
+                uploadProgress.classList.add('active');
+                if (progressFill) progressFill.style.width = '0%';
+                if (progressText) progressText.textContent = '0%';
+                if (uploadStatus) uploadStatus.textContent = 'Uploading files...';
+            }
+            
+            const submitBtn = fileUploadForm.querySelector('button[type="submit"]');
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Uploading...';
+            }
+            
+            try {
+                let progress = 0;
+                const progressInterval = setInterval(() => {
+                    progress += Math.random() * 15;
+                    if (progress > 90) progress = 90;
+                    if (progressFill) progressFill.style.width = progress + '%';
+                    if (progressText) progressText.textContent = Math.round(progress) + '%';
+                }, 200);
+                
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                clearInterval(progressInterval);
+                if (progressFill) progressFill.style.width = '100%';
+                if (progressText) progressText.textContent = '100%';
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    if (uploadStatus) uploadStatus.textContent = 'Upload completed successfully!';
+                    
+                    let message = 'Files uploaded successfully:\n';
+                    if (result.stats && result.stats.ips) {
+                        message += `• IPs: ${result.stats.ips.count} targets (${result.stats.ips.size_mb.toFixed(2)} MB)\n`;
+                    }
+                    if (result.stats && result.stats.credentials) {
+                        message += `• Users: ${result.stats.credentials.user_count} usernames\n`;
+                        message += `• Passwords: ${result.stats.credentials.password_count} passwords\n`;
+                    }
+                    
+                    showNotification(message, 'success');
+                    
+                    setTimeout(() => {
+                        if (clearFilesBtn) clearFilesBtn.click();
+                    }, 2000);
+                    
+                } else {
+                    if (uploadStatus) uploadStatus.textContent = 'Upload failed: ' + result.error;
+                    showNotification(result.error || 'Upload failed', 'error');
+                }
+            } catch (error) {
+                if (uploadStatus) uploadStatus.textContent = 'Upload error: ' + error.message;
+                showNotification('Upload error: ' + error.message, 'error');
+            } finally {
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Upload Files';
+                }
+                
+                setTimeout(() => {
+                    if (uploadProgress) uploadProgress.classList.remove('active');
+                }, 3000);
+            }
+        });
+    }
+    
     // Helper function for dashboard updates
     window.updateDashboard = function(data) {
         updateDashboardThrottled(data);

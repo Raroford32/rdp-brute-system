@@ -10,6 +10,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
+	_ "modernc.org/sqlite"
 	"rdp-brute-system/server/models"
 	"rdp-brute-system/server/cache"
 	"rdp-brute-system/shared/logger"
@@ -49,7 +50,7 @@ const (
 	BulkFlushInterval = 500 * time.Millisecond
 )
 
-// NewDB initializes the database connection with optimized connection pooling
+// NewDB initializes the database connection with optimized connection pooling (PostgreSQL)
 func NewDB(dataSourceName string) (*DB, error) {
 	db, err := sqlx.Connect("postgres", dataSourceName)
 	if err != nil {
@@ -62,7 +63,7 @@ func NewDB(dataSourceName string) (*DB, error) {
 	db.SetConnMaxLifetime(10 * time.Minute)   // Increased from 5 minutes
 	db.SetConnMaxIdleTime(5 * time.Minute)    // Increased from 1 minute
 
-	logger.ServerLogger.Info("Database connection successful with optimized connection pooling")
+	logger.ServerLogger.Info("PostgreSQL database connection successful with optimized connection pooling")
 	
 	wrappedDB := &DB{
 		DB:           db,
@@ -73,6 +74,53 @@ func NewDB(dataSourceName string) (*DB, error) {
 	
 	// Initialize prepared statements
 	if err := wrappedDB.initPreparedStatements(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to initialize prepared statements: %v", err)
+	}
+	
+	// Start bulk operation processor
+	go wrappedDB.bulkProcessor()
+	
+	return wrappedDB, nil
+}
+
+func NewSQLiteDB(dataSourceName string) (*DB, error) {
+	db, err := sqlx.Connect("sqlite", dataSourceName)
+	if err != nil {
+		return nil, err
+	}
+
+	db.SetMaxOpenConns(1)                      // SQLite works best with single connection
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)                   // No connection lifetime limit
+	db.SetConnMaxIdleTime(0)
+
+	_, err = db.Exec("PRAGMA journal_mode=WAL")
+	if err != nil {
+		logger.ServerLogger.Warn("Failed to set WAL mode", map[string]interface{}{"error": err.Error()})
+	}
+	
+	_, err = db.Exec("PRAGMA synchronous=NORMAL")
+	if err != nil {
+		logger.ServerLogger.Warn("Failed to set synchronous mode", map[string]interface{}{"error": err.Error()})
+	}
+	
+	_, err = db.Exec("PRAGMA cache_size=10000")
+	if err != nil {
+		logger.ServerLogger.Warn("Failed to set cache size", map[string]interface{}{"error": err.Error()})
+	}
+
+	logger.ServerLogger.Info("SQLite database connection successful with optimizations")
+	
+	wrappedDB := &DB{
+		DB:           db,
+		stmtCache:    make(map[string]*sqlx.Stmt),
+		resultBuffer: make([]models.Result, 0, BulkBufferSize),
+		queryCache:   cache.NewQueryCache(1000, 30*time.Second), // 1000 entries, 30s TTL
+	}
+	
+	// Initialize prepared statements for SQLite
+	if err := wrappedDB.initSQLitePreparedStatements(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to initialize prepared statements: %v", err)
 	}
@@ -165,6 +213,87 @@ func (db *DB) initPreparedStatements() error {
 	return nil
 }
 
+func (db *DB) initSQLitePreparedStatements() error {
+	statements := map[string]string{
+		StmtGetTargets: `
+			SELECT id, ip, port FROM targets 
+			WHERE status = 'pending' 
+			LIMIT ?`,
+		
+		StmtGetTargetsPriority: `
+			SELECT id, ip, port
+			FROM targets
+			WHERE status = 'pending'
+			ORDER BY
+				CASE WHEN attempts = 0 THEN 0 ELSE 1 END,
+				attempts ASC,
+				last_attempt ASC
+			LIMIT ?`,
+		
+		StmtUpdateTargetStatus: `
+			UPDATE targets 
+			SET status = ?, updated_at = ? 
+			WHERE id = ?`,
+		
+		StmtGetUsernames: `
+			SELECT username FROM credentials 
+			WHERE type = 'username' 
+			LIMIT ?`,
+		
+		StmtGetPasswords: `
+			SELECT password FROM credentials 
+			WHERE type = 'password' 
+			LIMIT ?`,
+		
+		StmtUpdateClientHB: `
+			UPDATE clients
+			SET last_heartbeat = ?, current_pps = ?, 
+				total_attempts = total_attempts + ?, 
+				success_count = success_count + ?, 
+				last_updated = ?
+			WHERE id = ?`,
+		
+		StmtGetClientPerf: `
+			SELECT 
+				COALESCE(AVG(avg_pps), 0),
+				COALESCE(CAST(SUM(success_count) AS REAL) / MAX(CAST(SUM(attempts) AS REAL), 1), 0)
+			FROM tasks
+			WHERE client_id = ? AND status = 'completed' AND completed_at > ?`,
+		
+		StmtSaveResult: `
+			INSERT INTO results 
+			(target_id, client_id, ip, port, username, password, found_at, verified)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		
+		StmtGetClientWorkload: `
+			SELECT COALESCE(SUM(target_count), 0)
+			FROM tasks
+			WHERE client_id = ? AND status IN ('assigned', 'in_progress')`,
+		
+		StmtUpdateTaskProgress: `
+			UPDATE tasks
+			SET progress = ?,
+				attempts = attempts + ?,
+				success_count = success_count + ?,
+				avg_pps = ?,
+				last_update = ?
+			WHERE id = ?`,
+	}
+	
+	for key, query := range statements {
+		stmt, err := db.Preparex(query)
+		if err != nil {
+			return fmt.Errorf("failed to prepare statement %s: %v", key, err)
+		}
+		db.stmtCache[key] = stmt
+	}
+	
+	logger.ServerLogger.Info("Initialized SQLite prepared statements", map[string]interface{}{
+		"count": len(statements),
+	})
+	return nil
+}
+
 // getStmt retrieves a prepared statement from the cache
 func (db *DB) getStmt(key string) *sqlx.Stmt {
 	db.stmtCacheMu.RLock()
@@ -199,6 +328,195 @@ func (db *DB) Stats() sql.DBStats {
 
 // CreateTables creates the database tables if they don't exist with optimized indexes
 func (db *DB) CreateTables() {
+	driverName := db.DriverName()
+	
+	if driverName == "sqlite" {
+		db.createSQLiteTables()
+	} else {
+		db.createPostgresTables()
+	}
+}
+
+func (db *DB) createSQLiteTables() {
+	// Clients table
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS clients (
+			id TEXT PRIMARY KEY,
+			hostname TEXT,
+			os TEXT,
+			cpu_cores INTEGER,
+			max_threads INTEGER,
+			version TEXT,
+			last_heartbeat DATETIME,
+			status TEXT,
+			total_attempts INTEGER,
+			success_count INTEGER,
+			current_pps REAL,
+			registered_at DATETIME,
+			last_updated DATETIME
+		);
+		
+		CREATE INDEX IF NOT EXISTS idx_clients_status ON clients(status);
+		CREATE INDEX IF NOT EXISTS idx_clients_heartbeat ON clients(last_heartbeat);
+	`)
+	if err != nil {
+		logger.ServerLogger.Fatal("Error creating clients table", map[string]interface{}{
+			"error": err.Error(),
+		})
+	}
+
+	// Targets table with optimized indexes
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS targets (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			ip TEXT,
+			port INTEGER,
+			status TEXT,
+			attempts INTEGER DEFAULT 0,
+			last_attempt DATETIME,
+			created_at DATETIME,
+			updated_at DATETIME
+		);
+		
+		CREATE INDEX IF NOT EXISTS idx_targets_status ON targets(status);
+		CREATE INDEX IF NOT EXISTS idx_targets_priority ON targets(status, attempts, last_attempt);
+		CREATE INDEX IF NOT EXISTS idx_targets_ip ON targets(ip);
+	`)
+	if err != nil {
+		logger.ServerLogger.Fatal("Error creating targets table", map[string]interface{}{"error": err.Error()})
+	}
+
+	// Credentials table
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS credentials (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT,
+			password TEXT,
+			type TEXT
+		);
+		
+		CREATE INDEX IF NOT EXISTS idx_credentials_type ON credentials(type);
+	`)
+	if err != nil {
+		logger.ServerLogger.Fatal("Error creating credentials table", map[string]interface{}{"error": err.Error()})
+	}
+
+	// Results table with indexes
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS results (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			target_id INTEGER,
+			client_id TEXT,
+			ip TEXT,
+			port INTEGER,
+			username TEXT,
+			password TEXT,
+			found_at DATETIME,
+			verified BOOLEAN,
+			operation_id TEXT,
+			FOREIGN KEY (target_id) REFERENCES targets(id),
+			FOREIGN KEY (client_id) REFERENCES clients(id)
+		);
+		
+		CREATE INDEX IF NOT EXISTS idx_results_found_at ON results(found_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_results_client ON results(client_id);
+		CREATE INDEX IF NOT EXISTS idx_results_ip ON results(ip);
+		CREATE INDEX IF NOT EXISTS idx_results_operation ON results(operation_id);
+	`)
+	if err != nil {
+		logger.ServerLogger.Fatal("Error creating results table", map[string]interface{}{"error": err.Error()})
+	}
+
+	// Tasks table with enhanced tracking and indexes
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS tasks (
+			id TEXT PRIMARY KEY,
+			client_id TEXT,
+			status TEXT,
+			priority INTEGER,
+			target_count INTEGER,
+			progress REAL,
+			attempts INTEGER DEFAULT 0,
+			success_count INTEGER DEFAULT 0,
+			assigned_at DATETIME,
+			started_at DATETIME,
+			completed_at DATETIME,
+			expires_at DATETIME,
+			last_update DATETIME,
+			batch_size INTEGER,
+			avg_pps REAL,
+			operation_id TEXT,
+			FOREIGN KEY (client_id) REFERENCES clients(id)
+		);
+		
+		CREATE INDEX IF NOT EXISTS idx_tasks_client ON tasks(client_id);
+		CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+		CREATE INDEX IF NOT EXISTS idx_tasks_expires ON tasks(expires_at);
+		CREATE INDEX IF NOT EXISTS idx_tasks_client_status ON tasks(client_id, status);
+		CREATE INDEX IF NOT EXISTS idx_tasks_operation ON tasks(operation_id);
+	`)
+	if err != nil {
+		logger.ServerLogger.Fatal("Error creating tasks table", map[string]interface{}{"error": err.Error()})
+	}
+
+	// Task-Targets table
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS task_targets (
+			task_id TEXT,
+			target_id INTEGER,
+			PRIMARY KEY (task_id, target_id),
+			FOREIGN KEY (task_id) REFERENCES tasks(id),
+			FOREIGN KEY (target_id) REFERENCES targets(id)
+		);
+		
+		CREATE INDEX IF NOT EXISTS idx_task_targets_task ON task_targets(task_id);
+		CREATE INDEX IF NOT EXISTS idx_task_targets_target ON task_targets(target_id);
+	`)
+	if err != nil {
+		logger.ServerLogger.Fatal("Error creating task_targets table", map[string]interface{}{"error": err.Error()})
+	}
+
+	// Config table
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS config (
+			key TEXT PRIMARY KEY,
+			value TEXT,
+			updated_at DATETIME
+		)
+	`)
+	if err != nil {
+		logger.ServerLogger.Fatal("Error creating config table", map[string]interface{}{"error": err.Error()})
+	}
+
+	// Operations table
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS operations (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT,
+			state TEXT NOT NULL,
+			targets TEXT NOT NULL,
+			credentials TEXT NOT NULL,
+			created_at DATETIME NOT NULL,
+			started_at DATETIME,
+			paused_at DATETIME,
+			completed_at DATETIME,
+			stopped_at DATETIME,
+			statistics TEXT,
+			settings TEXT
+		);
+		
+		CREATE INDEX IF NOT EXISTS idx_operations_state ON operations(state);
+		CREATE INDEX IF NOT EXISTS idx_operations_created ON operations(created_at DESC);
+	`)
+	if err != nil {
+		logger.ServerLogger.Fatal("Error creating operations table", map[string]interface{}{"error": err.Error()})
+	}
+
+	logger.ServerLogger.Info("SQLite database tables created successfully with optimized indexes", nil)
+}
+
+func (db *DB) createPostgresTables() {
 	// Clients table
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS clients (
@@ -399,7 +717,7 @@ func (db *DB) CreateTables() {
 		})
 	}
 
-	logger.ServerLogger.Info("Database tables created successfully with optimized indexes", nil)
+	logger.ServerLogger.Info("PostgreSQL database tables created successfully with optimized indexes", nil)
 }
 
 // RegisterClient registers a new client or updates an existing one

