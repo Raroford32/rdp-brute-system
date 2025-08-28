@@ -36,16 +36,17 @@ func RunWithEmbeddedAssets(staticFiles, templateFiles embed.FS) {
 }
 
 func RunWithEmbeddedAssetsContext(ctx context.Context) {
-	// Load environment variables
-	if err := godotenv.Load(); err != nil {
-		logger.ServerLogger.Warn("No .env file found", nil)
-	}
-	
-	// Initialize logging system
+	// Initialize logging system first
 	logDir := getEnv("LOG_DIR", "./logs")
 	silentMode := getEnv("SILENT_MODE", "true") == "true"
 	if err := logger.InitializeLoggers(logDir, silentMode); err != nil {
+		fmt.Printf("Failed to initialize loggers: %v\n", err)
 		os.Exit(1)
+	}
+	
+	// Load environment variables
+	if err := godotenv.Load(); err != nil {
+		logger.ServerLogger.Info("No .env file found (this is normal)", nil)
 	}
 	
 	// Set Gin to release mode for production
