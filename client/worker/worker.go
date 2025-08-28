@@ -336,12 +336,11 @@ func (as *AdaptiveScaler) adjustWorkers() {
 	numCPU := runtime.NumCPU()
 	targetWorkers := currentWorkers
 	
-	// Scale up if high PPS and tasks are queued
-	if pps > 500 && activeTasks > 0 && len(as.worker.taskQueue) > 0 {
-		targetWorkers = currentWorkers + int32(numCPU/2)
-	} else if pps < 100 && currentWorkers > int32(as.minWorkers) {
-		// Scale down if low PPS
-		targetWorkers = currentWorkers - int32(numCPU/4)
+	if pps > 300 && activeTasks > 0 && len(as.worker.taskQueue) > 0 {
+		targetWorkers = currentWorkers + int32(numCPU)
+	} else if pps < 50 && currentWorkers > int32(as.minWorkers) {
+		// Scale down if very low PPS
+		targetWorkers = currentWorkers - int32(numCPU/2)
 	}
 	
 	// Apply bounds

